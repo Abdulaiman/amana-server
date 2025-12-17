@@ -3,7 +3,15 @@ const path = require('path');
 
 // Set storage engine
 // Set storage engine
-const storage = multer.memoryStorage();
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/');
+  },
+  filename: function (req, file, cb) {
+    // Unique filename: fieldname-timestamp.ext
+    cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
+  },
+});
 
 const checkFileType = (file, cb) => {
   const filetypes = /jpeg|jpg|png|pdf/;

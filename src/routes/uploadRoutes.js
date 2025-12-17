@@ -3,26 +3,7 @@ const router = express.Router();
 const upload = require('../middleware/uploadMiddleware');
 const cloudinary = require('../utils/cloudinary');
 
-
-const stream = require('stream');
-
-const uploadFromBuffer = (fileBuffer) => {
-    return new Promise((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-            { folder: 'amana' },
-            (error, result) => {
-                if (error) {
-                    reject(error);
-                } else {
-                    resolve(result);
-                }
-            }
-        );
-        const bufferStream = new stream.PassThrough();
-        bufferStream.end(fileBuffer);
-        bufferStream.pipe(uploadStream);
-    });
-};
+const fs = require('fs');
 
 router.post('/', upload.array('files', 10), async (req, res) => {
   try {
@@ -32,13 +13,42 @@ router.post('/', upload.array('files', 10), async (req, res) => {
         return res.status(400).json({ message: 'No files uploaded' });
     }
 
-    const uploadPromises = files.map(file => uploadFromBuffer(file.buffer));
-    const results = await Promise.all(uploadPromises);
-    const urls = results.map(result => result.secure_url);
+    const uploadPromises = files.map(file => {
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Cloudinary upload timed out after 15s'));
+            }, 15000);
 
+            cloudinary.uploader.upload(file.path, { folder: 'amana' }, (error, result) => {
+                clearTimeout(timeout);
+                
+                // Delete file from server after upload (success or fail)
+                try {
+                    if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+                } catch (err) {
+                    console.error('Failed to delete local file:', err);
+                }
+
+                if (error) {
+                    console.error('Cloudinary callback error:', error);
+                    reject(error);
+                } else {
+                    resolve(result.secure_url);
+                }
+            });
+        });
+    });
+
+    const urls = await Promise.all(uploadPromises);
     res.json(urls);
   } catch (error) {
      console.error('Cloudinary Upload Error:', error);
+     // Clean up any remaining files if main process fails
+     if (req.files) {
+         req.files.forEach(file => {
+             if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+         });
+     }
     res.status(500).json({ message: 'Upload failed' });
   }
 });
