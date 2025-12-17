@@ -1,0 +1,146 @@
+const User = require('../models/User');
+const { 
+    calculateInitialScore, 
+    determineCreditLimit, 
+    determineTier 
+} = require('../utils/amanaEngine');
+
+// @desc    Submit Psychometric Test Only (Step 1)
+// @route   POST /api/retailer/onboarding
+// @access  Private
+const submitOnboarding = async (req, res) => {
+    try {
+        const { testScore } = req.body;
+        
+        if (!req.user || !req.user._id) throw new Error('User context missing');
+
+        const user = await User.findById(req.user._id);
+        if (!user) throw new Error('User not found');
+
+        // Just save the quiz score. Limit comes after Profile Completion.
+        user.hasTakenTest = true;
+        user.testScore = Number(testScore);
+        
+        await user.save();
+
+        res.json({
+            message: 'Trust Assessment saved. Please complete your profile to unlock credit.',
+            nextStep: 'complete_profile'
+        });
+
+    } catch (error) {
+        console.error('Onboarding Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// @desc    Complete Profile & KYC (Step 2 - Unlocks Credit)
+// @route   PUT /api/retailer/profile/complete
+// @access  Private
+const completeProfile = async (req, res) => {
+    try {
+        const { 
+            businessName, businessType, yearsInBusiness, startingCapital, description, address,
+            bvn, idCardUrl, locationProofUrl, profilePicUrl, nextOfKin
+        } = req.body;
+
+        const user = await User.findById(req.user._id);
+
+        // Gatekeeper: Check if sensitive data is locked
+        if (user.sensitiveDataLocked) {
+             // If locked, we reject changes to sensitive fields, but allow Business Info updates if needed?
+             // User prompt: "sensitive data should not be edited... all necessary things should remain unchangable"
+             // Implementation: If locked, reject the request if it tries to touch sensitive fields.
+             // For simplicity in this endpoint (which is "Complete Profile"), we block the whole thing if already verified.
+             return res.status(400).json({ message: 'Profile is verified and locked. Contact support for changes.' });
+        }
+
+        // 1. Save Business & Personal Info
+        user.businessInfo = {
+            businessName, businessType, yearsInBusiness, startingCapital, description
+        };
+        user.address = address;
+        
+        user.nextOfKin = nextOfKin; // Expecting object { name, phone... }
+
+        // 2. Save Sensitive KYC (Locked)
+        user.kyc = {
+            bvn,
+            idCardUrl,
+            locationProofUrl,
+            profilePicUrl,
+            isKycSubmitted: true,
+            isKycVerified: false // Requires Admin approval ideally, auto for MVP
+        };
+        
+        user.sensitiveDataLocked = true; // LOCK IT NOW
+
+        // 3. RUN AMANA ENGINE
+        // Calculate Score based on Quiz (saved earlier) + New Biz Data
+        const finalScore = calculateInitialScore(user.testScore, {
+            yearsInBusiness,
+            hasPhysicalLocation: !!locationProofUrl,
+            startingCapital: startingCapital === '200k+' ? 'high' : 'low'
+        });
+
+        const limit = determineCreditLimit(finalScore);
+        const tier = determineTier(finalScore);
+
+        // 4. Update Financials
+        user.amanaScore = finalScore;
+        user.creditLimit = limit;
+        user.tier = tier;
+        user.isProfileComplete = true; // UNLOCKS DASHBOARD
+
+        await user.save();
+
+        res.json({
+            message: 'Profile Completed! Your Credit Limit is active.',
+            amanaScore: finalScore,
+            creditLimit: limit,
+            tier: tier
+        });
+
+    } catch (error) {
+        console.error('Profile Completion Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// @desc    Get Retailer Profile
+// @route   GET /api/retailer/profile
+// @access  Private
+const getRetailerProfile = async (req, res) => {
+    const user = await User.findById(req.user._id);
+
+    if (user) {
+        // Calculate Markup on the fly to ensure consistency with Engine
+        const markupPercentage = require('../utils/amanaEngine').determineMarkup(user.amanaScore);
+
+        res.json({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone, // Added
+            address: user.address, // Added
+            isProfileComplete: user.isProfileComplete,
+            businessInfo: user.businessInfo,
+            sensitiveDataLocked: user.sensitiveDataLocked,
+            
+            // Financials
+            walletBalance: user.walletBalance,
+            creditLimit: user.creditLimit,
+            usedCredit: user.usedCredit,
+            amanaScore: user.amanaScore,
+            tier: user.tier || 'Bronze',
+            markupTier: markupPercentage,
+            
+            hasTakenTest: user.hasTakenTest
+        });
+    } else {
+        res.status(404);
+        throw new Error('User not found');
+    }
+};
+
+module.exports = { submitOnboarding, completeProfile, getRetailerProfile };
