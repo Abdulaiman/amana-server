@@ -80,7 +80,7 @@ const completeProfile = async (req, res) => {
         const finalScore = calculateInitialScore(user.testScore, {
             yearsInBusiness,
             hasPhysicalLocation: !!locationProofUrl,
-            startingCapital: startingCapital === '200k+' ? 'high' : 'low'
+            startingCapital // Pass 'low', 'medium', or 'high' directly
         });
 
         const limit = determineCreditLimit(finalScore);

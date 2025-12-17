@@ -5,16 +5,36 @@
 
 // 1. Calculate Initial Score (Onboarding + KYC)
 const calculateInitialScore = (testScore, businessData) => {
-    let score = testScore || 0; // Psychometric 0-60
-    
-    // Business Data Bonus (up to 40 points)
+    // 1. PSYCHOMETRIC (Max 40 points)
+    // Input testScore is 0-75. Normalize to 40.
+    const normalizedTestScore = Math.min((testScore / 75) * 40, 40);
+
+    // 2. BUSINESS MATURITY & STABILITY (Max 35 points)
+    let businessScore = 0;
     if (businessData) {
-        if (businessData.yearsInBusiness >= 2) score += 10;
-        if (businessData.hasPhysicalLocation) score += 20; // Verified via upload
-        if (businessData.startingCapital === 'high') score += 10;
+        // Years in Business (Max 15)
+        if (businessData.yearsInBusiness >= 5) businessScore += 15;
+        else if (businessData.yearsInBusiness >= 2) businessScore += 10;
+        else if (businessData.yearsInBusiness >= 1) businessScore += 5;
+
+        // Physical Location (Max 10) - Strong signal of permanence
+        if (businessData.hasPhysicalLocation) businessScore += 10;
+
+        // Capital (Max 10) - Capacity buffer
+        if (businessData.startingCapital === 'high') businessScore += 10;
+        else if (businessData.startingCapital === 'medium') businessScore += 5;
     }
+
+    // 3. KYC / IDENTITY (Max 25 points)
+    // If they reach this calculation, they have provided BVN etc.
+    // We give a base trust score for providing the data.
+    let kycScore = 25; 
+
+    // TOTAL CALCULATION
+    const totalScore = normalizedTestScore + businessScore + kycScore;
     
-    return Math.min(score, 100);
+    // Round and Cap at 100
+    return Math.min(Math.round(totalScore), 100);
 };
 
 // 2. Determine Credit Limit (Linear Formula)
