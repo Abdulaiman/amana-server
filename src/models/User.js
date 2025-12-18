@@ -64,6 +64,9 @@ const userSchema = mongoose.Schema({
   hasTakenTest: { type: Boolean, default: false },
   testScore: { type: Number },
 
+  // Agent System (Murabaha Intermediary)
+  isAgent: { type: Boolean, default: false }
+
 }, { timestamps: true });
 
 // Password Match

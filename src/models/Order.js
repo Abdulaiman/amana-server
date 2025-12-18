@@ -20,13 +20,30 @@ const orderSchema = mongoose.Schema({
   markupAmount: { type: Number, required: true }, // Calculated markup
   totalRepaymentAmount: { type: Number, required: true }, // itemsPrice + markupAmount
   
-  // Status flow (Escrow: vendor confirms → user picks up → user confirms receipt → completed)
+  // Status flow
   status: { 
     type: String, 
     required: true, 
     default: 'pending_vendor',
-    enum: ['pending_vendor', 'ready_for_pickup', 'goods_received', 'completed', 'repaid', 'cancelled', 'defaulted'] 
+    enum: [
+        'pending_vendor', 
+        'ready_for_pickup', 
+        'vendor_settled', // Added for Agent Workflow
+        'goods_received', 
+        'completed', 
+        'repaid', 
+        'cancelled', 
+        'defaulted'
+    ] 
   },
+
+  // Agent Assignment
+  agent: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  agentAssignedAt: { type: Date },
+
+  // Settlement Tracking
+  isVendorSettled: { type: Boolean, default: false },
+  vendorSettledAt: { type: Date },
   
   // Security
   pickupCode: { type: String }, // OTP generated for pickup

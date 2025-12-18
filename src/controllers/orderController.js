@@ -91,7 +91,8 @@ const getOrderById = async (req, res, next) => {
     try {
         const order = await Order.findById(req.params.id)
             .populate('retailer', 'name email phone')
-            .populate('vendor', 'businessName email phones address');
+            .populate('vendor', 'businessName email phones address')
+            .populate('agent', 'name phone email kyc');
 
         if (order) {
             res.json(order);
@@ -132,11 +133,28 @@ const updateOrderToReady = async (req, res, next) => {
             });
         }
 
-        // ESCROW: Only update status, NO financial transactions yet
+        // MURABAHA AGENT ASSIGNMENT
+        // Find a random retailer who is an AGENT, but NOT the buyer
+        const agents = await User.find({ 
+            isAgent: true, 
+            _id: { $ne: order.retailer } 
+        });
+
+        if (agents.length === 0) {
+            return res.status(400).json({ 
+                message: 'No available Agents to facilitate this Murabaha transaction. Please contact Support.' 
+            });
+        }
+
+        // Pick a random agent
+        const randomAgent = agents[Math.floor(Math.random() * agents.length)];
+        
         order.status = 'ready_for_pickup';
         order.pickupCode = Math.floor(1000 + Math.random() * 9000).toString();
+        order.agent = randomAgent._id;
+        order.agentAssignedAt = new Date();
         
-        // Set Due Date (14 days from now - starts when vendor confirms)
+        // Set Due Date (14 days from now)
         const fourteenDays = 14 * 24 * 60 * 60 * 1000;
         order.dueDate = new Date(Date.now() + fourteenDays);
         
@@ -152,7 +170,56 @@ const updateOrderToReady = async (req, res, next) => {
     }
 };
 
-// @desc    Confirm Goods Received (Retailer confirms receipt - PAYMENT EXECUTES HERE)
+// @desc    Settle Vendor by Agent (Phase 1 of Murabaha: Amana acquires goods)
+// @route   PUT /api/orders/:id/settle-vendor
+// @access  Private (Agent)
+const settleVendorByAgent = async (req, res, next) => {
+    try {
+        const order = await Order.findById(req.params.id);
+
+        if (!order) {
+            return res.status(404).json({ message: 'Order not found' });
+        }
+
+        // Verify that the user is the assigned agent
+        if (order.agent.toString() !== req.user._id.toString()) {
+            return res.status(401).json({ message: 'Not authorized. You are not the assigned agent for this order.' });
+        }
+
+        if (order.status !== 'ready_for_pickup') {
+            return res.status(400).json({ message: 'Order is not in ready_for_pickup status' });
+        }
+
+        const vendor = await Vendor.findById(order.vendor);
+        if (!vendor) return res.status(404).json({ message: 'Vendor not found' });
+
+        // PHASE 1 SETTLEMENT: Amana pays the vendor via Agent's action
+        vendor.walletBalance += order.itemsPrice;
+        await vendor.save();
+
+        // Update Order
+        order.status = 'vendor_settled';
+        order.isVendorSettled = true;
+        order.vendorSettledAt = new Date();
+        const updatedOrder = await order.save();
+
+        // Log Transaction (Vendor Payment)
+        await Transaction.create({
+            vendor: vendor._id,
+            type: 'vendor_payout', 
+            amount: order.itemsPrice,
+            description: `Payment for Order ${order._id} - Settled by Agent ${req.user.name}`,
+            status: 'success',
+            orderId: order._id
+        });
+
+        res.json(updatedOrder);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Confirm Goods Received (Phase 2 of Murabaha: Retailer buys from Amana)
 // @route   PUT /api/orders/:id/received
 // @access  Private (Retailer)
 const confirmGoodsReceived = async (req, res, next) => {
@@ -167,34 +234,27 @@ const confirmGoodsReceived = async (req, res, next) => {
             return res.status(401).json({ message: 'Not authorized' });
         }
 
-        if (order.status !== 'ready_for_pickup') {
-            return res.status(400).json({ message: 'Order is not ready for pickup confirmation' });
+        if (order.status !== 'vendor_settled') {
+            return res.status(400).json({ message: 'Order must be settled by an agent before you can confirm receipt' });
         }
 
         const user = await User.findById(order.retailer);
-        const vendor = await Vendor.findById(order.vendor);
 
-        // ESCROW RELEASE: Now execute the financial transaction
-        // 1. Update User Debt
+        // PHASE 2 SETTLEMENT: Retailer takes debt from Amana
         user.usedCredit += order.totalRepaymentAmount;
         await user.save();
 
-        // 2. Credit Vendor Wallet
-        vendor.walletBalance += order.itemsPrice;
-        await vendor.save();
-
-        // 3. Update Order
+        // Update Order
         order.status = 'goods_received';
         order.goodsReceivedAt = new Date();
         const updatedOrder = await order.save();
 
-        // 4. Log Transaction
+        // Log Transaction (Loan Disbursement Tracking)
         await Transaction.create({
             user: user._id,
-            vendor: vendor._id,
             type: 'loan_disbursement',
-            amount: order.itemsPrice,
-            description: `Escrow release for Order ${order._id} - Goods confirmed received`,
+            amount: order.totalRepaymentAmount,
+            description: `Credit deducted for Order ${order._id} - Goods received from Agent`,
             status: 'success',
             orderId: order._id
         });
@@ -238,14 +298,22 @@ const updateOrderToCompleted = async (req, res, next) => {
 // @access  Private
 const getMyOrders = async (req, res, next) => {
     try {
-        let orders;
+        let query = {};
         if (req.user.role === 'retailer') {
-            orders = await Order.find({ retailer: req.user._id }).sort({ createdAt: -1 });
+            // Include orders I am buying OR orders I am assigned to as Agent
+            query = { $or: [{ retailer: req.user._id }, { agent: req.user._id }] };
         } else if (req.user.role === 'vendor' || req.userType === 'vendor') {
-            orders = await Order.find({ vendor: req.user._id }).sort({ createdAt: -1 });
+            query = { vendor: req.user._id };
         } else {
-            orders = [];
+            return res.json([]);
         }
+
+        const orders = await Order.find(query)
+            .populate('vendor', 'businessName address phones email')
+            .populate('retailer', 'name phone email businessInfo')
+            .populate('agent', 'name phone email kyc')
+            .sort({ createdAt: -1 });
+
         res.json(orders);
     } catch (error) {
         next(error);
@@ -293,4 +361,13 @@ const cancelOrder = async (req, res, next) => {
     }
 };
 
-module.exports = { addOrderItems, getOrderById, updateOrderToReady, confirmGoodsReceived, updateOrderToCompleted, getMyOrders, cancelOrder };
+module.exports = { 
+    addOrderItems, 
+    getOrderById, 
+    updateOrderToReady, 
+    settleVendorByAgent,
+    confirmGoodsReceived, 
+    updateOrderToCompleted, 
+    getMyOrders, 
+    cancelOrder 
+};

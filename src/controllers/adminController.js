@@ -227,6 +227,48 @@ const getAllRetailers = async (req, res) => {
     res.json(retailers);
 };
 
+// @desc    Get All Agents
+// @route   GET /api/admin/agents
+// @access  Private (Admin)
+const getAllAgents = async (req, res) => {
+    const agents = await User.find({ isAgent: true }).select('-password').sort({ createdAt: -1 });
+    res.json(agents);
+};
+
+// @desc    Toggle Agent Status for a Retailer
+// @route   PUT /api/admin/retailer/:id/agent
+// @access  Private (Admin)
+const toggleAgentStatus = async (req, res) => {
+    const user = await User.findById(req.params.id);
+
+    if (user && user.role === 'retailer') {
+        user.isAgent = !user.isAgent;
+        const updated = await user.save();
+        res.json({ message: `Agent status updated for ${user.name}`, isAgent: updated.isAgent });
+    } else {
+        res.status(404);
+        throw new Error('Retailer not found');
+    }
+};
+
+// @desc    Search for Retailers (to assign as agents)
+// @route   GET /api/admin/retailers/search
+// @access  Private (Admin)
+const searchRetailers = async (req, res) => {
+    const { query } = req.query; // can be phone or NIN
+    if (!query) return res.status(400).json({ message: 'Search query required' });
+
+    const retailers = await User.find({
+        role: 'retailer',
+        $or: [
+            { phone: query },
+            { "kyc.nin": query }
+        ]
+    }).select('-password');
+
+    res.json(retailers);
+};
+
 module.exports = { 
     getWithdrawalRequests, 
     confirmPayout, 
@@ -238,5 +280,8 @@ module.exports = {
     getVendorDetails,
     getAdminAnalytics,
     getAllVendors,
-    getAllRetailers
+    getAllRetailers,
+    getAllAgents,
+    toggleAgentStatus,
+    searchRetailers
 };

@@ -137,7 +137,8 @@ const getRetailerProfile = async (req, res) => {
             markupTier: markupPercentage,
             
             kyc: user.kyc,
-            hasTakenTest: user.hasTakenTest
+            hasTakenTest: user.hasTakenTest,
+            isAgent: user.isAgent
         });
     } else {
         res.status(404);
