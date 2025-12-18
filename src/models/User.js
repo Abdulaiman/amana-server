@@ -12,14 +12,22 @@ const userSchema = mongoose.Schema({
   // Identity & Verification (Sensitive - Locked after submit)
   kyc: {
     bvn: { type: String },
+    nin: { type: String }, // Dedicated field for NIN
     idCardUrl: { type: String }, // Cloudinary URL
     locationProofUrl: { type: String }, // Cloudinary URL
+    bankStatementUrl: { type: String }, // Added for PDF support
     profilePicUrl: { type: String }, 
     isKycSubmitted: { type: Boolean, default: false },
     isKycVerified: { type: Boolean, default: false } // Admin verify
   },
 
   isProfileComplete: { type: Boolean, default: false }, // Gatekeeper Flag
+  verificationStatus: { 
+    type: String, 
+    enum: ['unsubmitted', 'pending', 'approved', 'rejected'], 
+    default: 'unsubmitted' 
+  },
+  rejectionReason: { type: String },
   sensitiveDataLocked: { type: Boolean, default: false }, // Locks KYC fields after submission
 
   // Business Operations (Trust Signals)

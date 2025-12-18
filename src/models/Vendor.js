@@ -20,7 +20,8 @@ const vendorSchema = mongoose.Schema({
   cacNumber: { type: String },
   cacDocumentUrl: { type: String }, // Cloudinary URL
   isVerified: { type: Boolean, default: false }, // Admin controlled
-  verificationStatus: { type: String, enum: ['pending', 'verified', 'rejected'], default: 'pending' },
+  verificationStatus: { type: String, enum: ['unsubmitted', 'pending', 'verified', 'rejected'], default: 'unsubmitted' },
+  rejectionReason: { type: String },
   
   // Profile Completion (like retailers)
   isProfileComplete: { type: Boolean, default: false },

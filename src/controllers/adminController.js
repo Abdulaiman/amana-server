@@ -73,8 +73,115 @@ const verifyVendor = async (req, res) => {
     if (vendor) {
         vendor.isVerified = true;
         vendor.verificationStatus = 'verified';
+        vendor.isProfileComplete = true; // Confirmation
+        vendor.rejectionReason = undefined; 
+        
         const updated = await vendor.save();
         res.json(updated);
+    } else {
+        res.status(404);
+        throw new Error('Vendor not found');
+    }
+};
+
+// @desc    Reject Vendor Verification
+// @route   PUT /api/admin/vendor/:id/reject
+// @access  Private (Admin)
+const rejectVendor = async (req, res) => {
+    const { reason } = req.body;
+    const vendor = await Vendor.findById(req.params.id);
+
+    if (vendor) {
+        vendor.verificationStatus = 'rejected';
+        vendor.isVerified = false;
+        vendor.rejectionReason = reason || 'Documents do not meet requirements.';
+        
+        const updated = await vendor.save();
+        res.json(updated);
+    } else {
+        res.status(404);
+        throw new Error('Vendor not found');
+    }
+};
+
+// @desc    Verify Retailer
+// @route   PUT /api/admin/retailer/:id/verify
+// @access  Private (Admin)
+const { calculateInitialScore, determineCreditLimit, determineTier } = require('../utils/amanaEngine');
+
+const verifyRetailer = async (req, res) => {
+    const user = await User.findById(req.params.id);
+
+    if (user && user.role === 'retailer') {
+        // 1. RUN AMANA ENGINE UPON APPROVAL
+        const finalScore = calculateInitialScore(user.testScore, {
+            yearsInBusiness: user.businessInfo?.yearsInBusiness,
+            hasPhysicalLocation: !!user.kyc?.locationProofUrl,
+            startingCapital: user.businessInfo?.startingCapital
+        });
+
+        const limit = determineCreditLimit(finalScore);
+        const tier = determineTier(finalScore);
+
+        // 2. Update Status & Financials
+        user.verificationStatus = 'approved';
+        user.isKycVerified = true;
+        user.isProfileComplete = true;
+        user.rejectionReason = undefined;
+        
+        user.amanaScore = finalScore;
+        user.creditLimit = limit;
+        user.tier = tier;
+
+        const updated = await user.save();
+        res.json(updated);
+    } else {
+        res.status(404);
+        throw new Error('Retailer not found');
+    }
+};
+
+// @desc    Reject Retailer
+// @route   PUT /api/admin/retailer/:id/reject
+// @access  Private (Admin)
+const rejectRetailer = async (req, res) => {
+    const { reason } = req.body;
+    const user = await User.findById(req.params.id);
+
+    if (user && user.role === 'retailer') {
+        user.verificationStatus = 'rejected';
+        user.isProfileComplete = false; // Kick back to profile steps
+        user.sensitiveDataLocked = false; // Allow re-upload
+        user.rejectionReason = reason || 'Information provided is incomplete or unclear.';
+        
+        const updated = await user.save();
+        res.json(updated);
+    } else {
+        res.status(404);
+        throw new Error('Retailer not found');
+    }
+};
+
+// @desc    Get Detailed Retailer Info
+// @route   GET /api/admin/retailer/:id
+// @access  Private (Admin)
+const getRetailerDetails = async (req, res) => {
+    const retailer = await User.findById(req.params.id).select('-password');
+    if (retailer) {
+        res.json(retailer);
+    } else {
+        res.status(404);
+        throw new Error('Retailer not found');
+    }
+};
+
+// @desc    Get Detailed Vendor Info
+// @route   GET /api/admin/vendor/:id
+// @access  Private (Admin)
+const getVendorDetails = async (req, res) => {
+    const vendor = await Vendor.findById(req.params.id).select('-password');
+    if (vendor) {
+        res.json(vendor);
     } else {
         res.status(404);
         throw new Error('Vendor not found');
@@ -89,14 +196,18 @@ const getAdminAnalytics = async (req, res) => {
     const totalUsers = await User.countDocuments();
     const orders = await Order.countDocuments();
     const pendingPayouts = await WithdrawalRequest.countDocuments({ status: 'pending' });
+    
+    // Updated visibility of pending verifications
     const pendingVendorVerifications = await Vendor.countDocuments({ isProfileComplete: true, verificationStatus: 'pending' });
+    const pendingRetailerVerifications = await User.countDocuments({ role: 'retailer', verificationStatus: 'pending' });
     
     res.json({
         totalVendors,
         totalUsers,
         totalOrders: orders,
         pendingPayouts,
-        pendingVendorVerifications
+        pendingVendorVerifications,
+        pendingRetailerVerifications
     });
 };
 
@@ -116,28 +227,15 @@ const getAllRetailers = async (req, res) => {
     res.json(retailers);
 };
 
-// @desc    Reject Vendor Verification
-// @route   PUT /api/admin/vendor/:id/reject
-// @access  Private (Admin)
-const rejectVendor = async (req, res) => {
-    const vendor = await Vendor.findById(req.params.id);
-
-    if (vendor) {
-        vendor.verificationStatus = 'rejected';
-        vendor.isVerified = false;
-        const updated = await vendor.save();
-        res.json(updated);
-    } else {
-        res.status(404);
-        throw new Error('Vendor not found');
-    }
-};
-
 module.exports = { 
     getWithdrawalRequests, 
     confirmPayout, 
     verifyVendor, 
     rejectVendor,
+    verifyRetailer,
+    rejectRetailer,
+    getRetailerDetails,
+    getVendorDetails,
     getAdminAnalytics,
     getAllVendors,
     getAllRetailers

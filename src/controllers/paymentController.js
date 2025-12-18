@@ -14,7 +14,7 @@ const initializePayment = async (req, res) => {
         const params = {
             email,
             amount: amount * 100, // Convert to Kobo
-            callback_url: 'http://localhost:5173/payment/callback',
+            callback_url: 'https://joinamana.com/payment/callback',
             metadata: {
                 userId: req.user._id,
                 orderId: orderId || null // Optional: specific order to repay

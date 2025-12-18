@@ -19,7 +19,7 @@ router.post('/', upload.array('files', 10), async (req, res) => {
                 reject(new Error('Cloudinary upload timed out after 15s'));
             }, 15000);
 
-            cloudinary.uploader.upload(file.path, { folder: 'amana' }, (error, result) => {
+            cloudinary.uploader.upload(file.path, { folder: 'amana', resource_type: 'auto' }, (error, result) => {
                 clearTimeout(timeout);
                 
                 // Delete file from server after upload (success or fail)

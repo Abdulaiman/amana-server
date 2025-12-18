@@ -10,7 +10,7 @@ const {
 // @access  Private
 const submitOnboarding = async (req, res) => {
     try {
-        const { testScore } = req.body;
+        const { testScore, bankStatementUrl, nin } = req.body;
         
         if (!req.user || !req.user._id) throw new Error('User context missing');
 
@@ -20,6 +20,16 @@ const submitOnboarding = async (req, res) => {
         // Just save the quiz score. Limit comes after Profile Completion.
         user.hasTakenTest = true;
         user.testScore = Number(testScore);
+        
+        // Save bank statement if provided
+        if (bankStatementUrl) {
+            user.kyc.bankStatementUrl = bankStatementUrl;
+        }
+
+        // Save NIN if provided
+        if (nin) {
+            user.kyc.nin = nin;
+        }
         
         await user.save();
 
@@ -41,7 +51,7 @@ const completeProfile = async (req, res) => {
     try {
         const { 
             businessName, businessType, yearsInBusiness, startingCapital, description, address,
-            bvn, idCardUrl, locationProofUrl, profilePicUrl, nextOfKin
+            bvn, nin, idCardUrl, locationProofUrl, profilePicUrl, nextOfKin
         } = req.body;
 
         const user = await User.findById(req.user._id);
@@ -65,40 +75,29 @@ const completeProfile = async (req, res) => {
 
         // 2. Save Sensitive KYC (Locked)
         user.kyc = {
-            bvn,
+            ...user.kyc, // Preserve NIN from onboarding
+            bvn: bvn || user.kyc.bvn,
+            nin: nin || user.kyc.nin,
             idCardUrl,
             locationProofUrl,
             profilePicUrl,
             isKycSubmitted: true,
-            isKycVerified: false // Requires Admin approval ideally, auto for MVP
+            isKycVerified: false 
         };
         
+        user.verificationStatus = 'pending';
         user.sensitiveDataLocked = true; // LOCK IT NOW
 
-        // 3. RUN AMANA ENGINE
-        // Calculate Score based on Quiz (saved earlier) + New Biz Data
-        const finalScore = calculateInitialScore(user.testScore, {
-            yearsInBusiness,
-            hasPhysicalLocation: !!locationProofUrl,
-            startingCapital // Pass 'low', 'medium', or 'high' directly
-        });
-
-        const limit = determineCreditLimit(finalScore);
-        const tier = determineTier(finalScore);
-
-        // 4. Update Financials
-        user.amanaScore = finalScore;
-        user.creditLimit = limit;
-        user.tier = tier;
-        user.isProfileComplete = true; // UNLOCKS DASHBOARD
+        // 3. DO NOT RUN AMANA ENGINE YET
+        // Score/Limit will be assigned by Admin upon approval.
+        
+        user.isProfileComplete = false; // Remains false until admin approves
 
         await user.save();
 
         res.json({
-            message: 'Profile Completed! Your Credit Limit is active.',
-            amanaScore: finalScore,
-            creditLimit: limit,
-            tier: tier
+            message: 'Profile submitted! Awaiting admin verification of your documents.',
+            verificationStatus: 'pending'
         });
 
     } catch (error) {
@@ -124,6 +123,8 @@ const getRetailerProfile = async (req, res) => {
             phone: user.phone, // Added
             address: user.address, // Added
             isProfileComplete: user.isProfileComplete,
+            verificationStatus: user.verificationStatus,
+            rejectionReason: user.rejectionReason,
             businessInfo: user.businessInfo,
             sensitiveDataLocked: user.sensitiveDataLocked,
             
@@ -135,6 +136,7 @@ const getRetailerProfile = async (req, res) => {
             tier: user.tier || 'Bronze',
             markupTier: markupPercentage,
             
+            kyc: user.kyc,
             hasTakenTest: user.hasTakenTest
         });
     } else {

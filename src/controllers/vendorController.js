@@ -24,6 +24,7 @@ const getVendorProfile = async (req, res) => {
             isVerified: vendor.isVerified,
             isProfileComplete: vendor.isProfileComplete,
             verificationStatus: vendor.verificationStatus,
+            rejectionReason: vendor.rejectionReason,
             cacNumber: vendor.cacNumber,
             cacDocumentUrl: vendor.cacDocumentUrl,
             rating: vendor.rating
@@ -61,14 +62,15 @@ const completeVendorProfile = async (req, res) => {
         };
     }
 
-    // Mark profile as complete
-    vendor.isProfileComplete = true;
+    // Mark profile form as complete, but VERIFICATION is pending
+    vendor.isProfileComplete = true; 
     vendor.verificationStatus = 'pending'; // Awaiting admin verification
+    vendor.rejectionReason = undefined; // Clear previous rejection if any
 
     const updatedVendor = await vendor.save();
 
     res.json({
-        message: 'Profile completed! Awaiting admin verification.',
+        message: 'KYC Details submitted! Awaiting admin verification.',
         isProfileComplete: updatedVendor.isProfileComplete,
         verificationStatus: updatedVendor.verificationStatus
     });
