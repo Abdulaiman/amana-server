@@ -56,13 +56,10 @@ const determineTier = (score) => {
 
 // 4. Determine Markup Percentage (Tiered)
 const determineMarkup = (score) => {
-    const tier = determineTier(score);
-    
-    switch (tier) {
-        case 'Gold': return 2.5;   // Best Rate
-        case 'Silver': return 3.5; // Standard
-        default: return 5.0;       // Base Rate
-    }
+    if (score >= 80) return 5.0;
+    if (score >= 60) return 8.0;
+    if (score >= 40) return 12.0;
+    return 15.0;
 };
 
 // 5. Calculate Score Growth (Repayment Behavior)

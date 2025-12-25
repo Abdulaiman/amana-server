@@ -16,8 +16,8 @@ router.post('/', upload.array('files', 10), async (req, res) => {
     const uploadPromises = files.map(file => {
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
-                reject(new Error('Cloudinary upload timed out after 15s'));
-            }, 15000);
+                reject(new Error('Cloudinary upload timed out after 30s'));
+            }, 30000);
 
             cloudinary.uploader.upload(file.path, { folder: 'amana', resource_type: 'auto' }, (error, result) => {
                 clearTimeout(timeout);
@@ -31,7 +31,7 @@ router.post('/', upload.array('files', 10), async (req, res) => {
 
                 if (error) {
                     console.error('Cloudinary callback error:', error);
-                    reject(error);
+                    reject(new Error(error.message || 'Cloudinary upload failed'));
                 } else {
                     resolve(result.secure_url);
                 }
@@ -49,7 +49,7 @@ router.post('/', upload.array('files', 10), async (req, res) => {
              if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
          });
      }
-    res.status(500).json({ message: 'Upload failed' });
+    res.status(500).json({ message: error.message || 'Upload failed' });
   }
 });
 

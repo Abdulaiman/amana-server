@@ -8,7 +8,8 @@ const {
     requestPayout,
     getMyPayoutRequests,
     getVendorDashboard,
-    getMyProducts
+    getMyProducts,
+    getVendorStats
 } = require('../controllers/vendorController');
 
 // Profile
@@ -18,6 +19,7 @@ router.put('/profile/complete', protect, completeVendorProfile);
 
 // Dashboard
 router.get('/dashboard', protect, getVendorDashboard);
+router.get('/stats', protect, getVendorStats);
 
 // Products (Vendor's own products)
 router.get('/products', protect, getMyProducts);

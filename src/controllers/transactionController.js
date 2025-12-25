@@ -1,6 +1,7 @@
 const Order = require('../models/Order');
 const WithdrawalRequest = require('../models/WithdrawalRequest');
 const Vendor = require('../models/Vendor');
+const Transaction = require('../models/Transaction');
 
 // @desc    Get All Transactions (Admin)
 // @route   GET /api/transactions/admin
@@ -120,7 +121,42 @@ const getVendorTransactions = async (req, res) => {
     }
 };
 
+// @desc    Get Retailer Transactions
+// @route   GET /api/transactions/retailer
+// @access  Private (Retailer)
+const getRetailerTransactions = async (req, res) => {
+    try {
+        const userId = req.user._id;
+
+        // Fetch Transactions (Repayments, Disbursements)
+        const transactions = await Transaction.find({ user: userId })
+            .sort({ createdAt: -1 });
+
+        // Normalize
+        const standardizedTransactions = transactions.map(tx => ({
+            _id: tx._id,
+            type: tx.type, // 'repayment' or 'loan_disbursement'
+            amount: tx.amount,
+            status: tx.status,
+            date: tx.createdAt,
+            description: tx.description,
+            reference: tx.reference || tx._id,
+            isCredit: tx.type === 'repayment' // Repayment reduces debt (Credit to wallet in a sense), Disbursement increases debt (Debit)
+            // Actually, let's use isCredit to mean "Balance Increase" and isDebit for "Balance Decrease"
+            // For Amana, Disbursement = You get goods (Credit), Repayment = You pay money (Debit)
+            // But usually in banking: Repayment = Credit (to account), Disbursement = Debit.
+            // Let's just use the 'type' for styling.
+        }));
+
+        res.json(standardizedTransactions);
+
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = {
     getAllTransactions,
-    getVendorTransactions
+    getVendorTransactions,
+    getRetailerTransactions
 };

@@ -1,5 +1,6 @@
 const Vendor = require('../models/Vendor');
 const Order = require('../models/Order');
+const Product = require('../models/Product');
 const WithdrawalRequest = require('../models/WithdrawalRequest');
 
 // @desc    Get Vendor Profile
@@ -9,6 +10,14 @@ const getVendorProfile = async (req, res) => {
     const vendor = await Vendor.findById(req.user._id);
 
     if (vendor) {
+        const [totalProducts, totalOrders, orders] = await Promise.all([
+            Product.countDocuments({ vendor: req.user._id }),
+            Order.countDocuments({ vendor: req.user._id }),
+            Order.find({ vendor: req.user._id, status: { $in: ['vendor_settled', 'repaid', 'goods_received', 'completed'] } })
+        ]);
+
+        const totalEarnings = orders.reduce((sum, order) => sum + (order.itemsPrice || 0), 0);
+
         res.json({
             _id: vendor._id,
             businessName: vendor.businessName,
@@ -27,7 +36,10 @@ const getVendorProfile = async (req, res) => {
             rejectionReason: vendor.rejectionReason,
             cacNumber: vendor.cacNumber,
             cacDocumentUrl: vendor.cacDocumentUrl,
-            rating: vendor.rating
+            rating: vendor.rating,
+            totalProducts,
+            totalOrders,
+            totalEarnings
         });
     } else {
         res.status(404);
@@ -87,6 +99,7 @@ const updateVendorProfile = async (req, res) => {
         vendor.phones = req.body.phones || vendor.phones;
         vendor.address = req.body.address || vendor.address;
         vendor.description = req.body.description || vendor.description;
+        vendor.profilePicUrl = req.body.profilePicUrl || vendor.profilePicUrl;
         
         // Update Bank Details
         if (req.body.bankDetails) {
@@ -104,6 +117,7 @@ const updateVendorProfile = async (req, res) => {
             businessName: updatedVendor.businessName,
             phones: updatedVendor.phones,
             bankDetails: updatedVendor.bankDetails,
+            profilePicUrl: updatedVendor.profilePicUrl,
             message: 'Profile updated successfully'
         });
     } else {
@@ -174,24 +188,87 @@ const getMyPayoutRequests = async (req, res) => {
 // @route   GET /api/vendor/dashboard
 // @access  Private (Vendor)
 const getVendorDashboard = async (req, res) => {
-    const orders = await Order.find({ vendor: req.user._id });
-    const pendingPayouts = await WithdrawalRequest.find({ vendor: req.user._id, status: 'pending' });
+    const [vendor, orders, pendingPayouts, totalProducts] = await Promise.all([
+        Vendor.findById(req.user._id),
+        Order.find({ vendor: req.user._id }).sort({ createdAt: -1 }),
+        WithdrawalRequest.find({ vendor: req.user._id, status: 'pending' }),
+        Product.countDocuments({ vendor: req.user._id })
+    ]);
+
+    if (!vendor) {
+        return res.status(404).json({ message: 'Vendor not found' });
+    }
     
+    // Calculate earnings from non-cancelled/non-pending orders
+    const successOrders = orders.filter(o => ['repaid', 'goods_received', 'vendor_settled', 'completed'].includes(o.status));
+    const totalEarnings = successOrders.reduce((sum, o) => sum + (o.itemsPrice || 0), 0);
+
     res.json({
         totalOrders: orders.length,
-        walletBalance: req.user.walletBalance,
+        walletBalance: vendor.walletBalance,
+        availableBalance: vendor.walletBalance,
+        totalEarnings,
+        totalProducts,
         pendingPayoutsCount: pendingPayouts.length,
-        recentOrders: orders.slice(0, 5)
+        recentOrders: orders.slice(0, 5),
+        isProfileComplete: vendor.isProfileComplete,
+        verificationStatus: vendor.verificationStatus,
+        rejectionReason: vendor.rejectionReason,
+        profilePicUrl: vendor.profilePicUrl,
+        bankDetails: vendor.bankDetails
     });
 };
 
 // @desc    Get All Vendor's Products (includes out of stock)
 // @route   GET /api/vendor/products
 // @access  Private (Vendor)
-const Product = require('../models/Product');
 const getMyProducts = async (req, res) => {
     const products = await Product.find({ vendor: req.user._id }).sort({ createdAt: -1 });
     res.json(products);
+};
+
+// @desc    Get Vendor Stats (Daily Sales for last 7 days)
+// @route   GET /api/vendor/stats
+// @access  Private (Vendor)
+const getVendorStats = async (req, res) => {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const stats = await Order.aggregate([
+        {
+            $match: {
+                vendor: req.user._id,
+                status: { $in: ['vendor_settled', 'repaid', 'goods_received', 'completed'] },
+                createdAt: { $gte: sevenDaysAgo }
+            }
+        },
+        {
+            $group: {
+                _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                totalSales: { $sum: "$itemsPrice" }
+            }
+        },
+        { $sort: { "_id": 1 } }
+    ]);
+
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const formattedStats = [];
+    
+    for (let i = 6; i >= 0; i--) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        const dateStr = date.toISOString().split('T')[0];
+        const dayIndex = date.getDay();
+        const dayName = days[dayIndex];
+        
+        const dayStat = stats.find(s => s._id === dateStr);
+        formattedStats.push({
+            label: dayName,
+            value: dayStat ? dayStat.totalSales : 0
+        });
+    }
+
+    res.json(formattedStats);
 };
 
 module.exports = { 
@@ -201,5 +278,6 @@ module.exports = {
     requestPayout,
     getMyPayoutRequests,
     getVendorDashboard,
-    getMyProducts
+    getMyProducts,
+    getVendorStats
 };

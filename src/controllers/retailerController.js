@@ -106,6 +106,53 @@ const completeProfile = async (req, res) => {
     }
 };
 
+// @desc    Update Basic Profile (Non-sensitive)
+// @route   PUT /api/retailer/profile
+// @access  Private
+const updateProfile = async (req, res) => {
+    try {
+        const { name, phone, address, businessInfo, profilePicUrl } = req.body;
+        const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Only update non-sensitive fields
+        if (name) user.name = name;
+        if (phone) user.phone = phone;
+        if (address) user.address = address;
+        if (profilePicUrl) {
+            user.kyc.profilePicUrl = profilePicUrl;
+        }
+        
+        if (businessInfo) {
+            user.businessInfo = {
+                ...user.businessInfo,
+                businessName: businessInfo.businessName || user.businessInfo?.businessName,
+                businessType: businessInfo.businessType || user.businessInfo?.businessType,
+                description: businessInfo.description || user.businessInfo?.description
+            };
+        }
+
+        await user.save();
+
+        res.json({
+            message: 'Profile updated successfully',
+            user: {
+                name: user.name,
+                phone: user.phone,
+                address: user.address,
+                businessInfo: user.businessInfo,
+                profilePicUrl: user.kyc?.profilePicUrl
+            }
+        });
+    } catch (error) {
+        console.error('Update Profile Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
 // @desc    Get Retailer Profile
 // @route   GET /api/retailer/profile
 // @access  Private
@@ -132,6 +179,7 @@ const getRetailerProfile = async (req, res) => {
             walletBalance: user.walletBalance,
             creditLimit: user.creditLimit,
             usedCredit: user.usedCredit,
+            availableCredit: user.creditLimit - user.usedCredit,
             amanaScore: user.amanaScore,
             tier: user.tier || 'Bronze',
             markupTier: markupPercentage,
@@ -146,4 +194,48 @@ const getRetailerProfile = async (req, res) => {
     }
 };
 
-module.exports = { submitOnboarding, completeProfile, getRetailerProfile };
+// @desc    Get Retailer Stats (Daily Purchases for last 7 days)
+// @route   GET /api/retailer/stats
+// @access  Private
+const getRetailerStats = async (req, res) => {
+    const Order = require('../models/Order');
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const stats = await Order.aggregate([
+        {
+            $match: {
+                retailer: req.user._id,
+                createdAt: { $gte: sevenDaysAgo }
+            }
+        },
+        {
+            $group: {
+                _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                totalSpent: { $sum: "$itemsPrice" }
+            }
+        },
+        { $sort: { "_id": 1 } }
+    ]);
+
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const formattedStats = [];
+    
+    for (let i = 6; i >= 0; i--) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        const dateStr = date.toISOString().split('T')[0];
+        const dayIndex = date.getDay();
+        const dayName = days[dayIndex];
+        
+        const dayStat = stats.find(s => s._id === dateStr);
+        formattedStats.push({
+            label: dayName,
+            value: dayStat ? dayStat.totalSpent : 0
+        });
+    }
+
+    res.json(formattedStats);
+};
+
+module.exports = { submitOnboarding, completeProfile, updateProfile, getRetailerProfile, getRetailerStats };

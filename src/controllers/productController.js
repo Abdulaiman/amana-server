@@ -31,13 +31,26 @@ const getProductById = async (req, res) => {
 const createProduct = async (req, res) => {
     const { name, price, description, category, countInStock, images } = req.body;
 
+    if (!name || !price || !description || !category) {
+        res.status(400);
+        throw new Error('Please provide all required fields (name, price, description, category)');
+    }
+
+    const numPrice = Number(price);
+    const numStock = Number(countInStock) || 0;
+
+    if (isNaN(numPrice)) {
+        res.status(400);
+        throw new Error('Price must be a valid number');
+    }
+
     const product = new Product({
         vendor: req.user._id,
         name,
-        price,
+        price: numPrice,
         description,
         category,
-        countInStock,
+        countInStock: numStock,
         images: images || [],
         isActive: true
     });
@@ -97,4 +110,13 @@ const deleteProduct = async (req, res) => {
     }
 };
 
-module.exports = { getProducts, getProductById, createProduct, updateProduct, deleteProduct };
+// @desc    Get All Categories
+// @route   GET /api/products/categories
+// @access  Public
+const getCategories = async (req, res) => {
+    const categories = await Product.distinct('category', { isActive: true, countInStock: { $gt: 0 } });
+    // Add "All" to the list
+    res.json(['All', ...categories]);
+};
+
+module.exports = { getProducts, getProductById, createProduct, updateProduct, deleteProduct, getCategories };

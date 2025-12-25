@@ -17,6 +17,12 @@ const authUser = async (req, res) => {
       name: user.name,
       email: user.email,
       role: user.role,
+      hasTakenTest: user.hasTakenTest,
+      amanaScore: user.amanaScore,
+      verificationStatus: user.verificationStatus,
+      isProfileComplete: user.isProfileComplete,
+      kyc: user.kyc,
+      isAgent: user.isAgent,
       token: generateToken(user._id, user.role),
     });
   } else {
@@ -28,7 +34,10 @@ const authUser = async (req, res) => {
             _id: vendor._id,
             businessName: vendor.businessName,
             email: vendor.email,
-            role: 'vendor', // Explicit role
+            role: 'vendor',
+            verificationStatus: vendor.verificationStatus,
+            isProfileComplete: vendor.isProfileComplete,
+            isVerified: vendor.isVerified,
             token: generateToken(vendor._id, 'vendor'),
         });
     } else {
@@ -64,6 +73,12 @@ const registerUser = async (req, res) => {
       name: user.name,
       email: user.email,
       role: 'retailer',
+      hasTakenTest: user.hasTakenTest,
+      amanaScore: user.amanaScore,
+      verificationStatus: user.verificationStatus,
+      isProfileComplete: user.isProfileComplete,
+      kyc: user.kyc,
+      isAgent: user.isAgent,
       token: generateToken(user._id, 'retailer'),
     });
   } else {
@@ -103,6 +118,9 @@ const registerVendor = async (req, res) => {
         businessName: vendor.businessName,
         email: vendor.email,
         role: 'vendor',
+        verificationStatus: vendor.verificationStatus,
+        isProfileComplete: vendor.isProfileComplete,
+        isVerified: vendor.isVerified,
         token: generateToken(vendor._id, 'vendor'),
       });
     } else {
