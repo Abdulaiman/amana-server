@@ -48,7 +48,18 @@ const addOrderItems = async (req, res, next) => {
         const markupAmount = itemsPrice * (markupPercentage / 100);
         const totalRepayment = itemsPrice + markupAmount;
 
-        // Credit Check - Only verify, DO NOT deduct yet
+        const vendor = await Vendor.findById(vendorId);
+        if (!vendor) {
+            return res.status(404).json({ message: 'Vendor not found' });
+        }
+
+        // Anti-Cheating: Self-Dealing Guard
+        if (user.email === vendor.email || (user.linkedProfileId && user.linkedProfileId.toString() === vendor._id.toString())) {
+            return res.status(403).json({ 
+                message: "Security Block: You cannot purchase products from your own vendor profile." 
+            });
+        }
+
         const availableCredit = user.creditLimit - user.usedCredit;
 
         if (totalRepayment > availableCredit) {
@@ -135,20 +146,29 @@ const updateOrderToReady = async (req, res, next) => {
         }
 
         // MURABAHA AGENT ASSIGNMENT
-        // Find a random retailer who is an AGENT, but NOT the buyer
+        // Find a random retailer who is an AGENT, but NOT the buyer AND NOT linked to the vendor
         const agents = await User.find({ 
             isAgent: true, 
-            _id: { $ne: order.retailer } 
+            _id: { $ne: order.retailer },
+            email: { $ne: order.vendor.email } // order.vendor is populated? let's check
         });
 
-        if (agents.length === 0) {
+        // Re-check order.vendor population
+        const vendor = await Vendor.findById(order.vendor);
+        const filteredAgents = await User.find({
+            isAgent: true,
+            _id: { $ne: order.retailer },
+            email: { $ne: vendor.email }
+        });
+
+        if (filteredAgents.length === 0) {
             return res.status(400).json({ 
                 message: 'No available Agents to facilitate this Murabaha transaction. Please contact Support.' 
             });
         }
 
         // Pick a random agent
-        const randomAgent = agents[Math.floor(Math.random() * agents.length)];
+        const randomAgent = filteredAgents[Math.floor(Math.random() * filteredAgents.length)];
         
         order.status = 'ready_for_pickup';
         order.pickupCode = Math.floor(1000 + Math.random() * 9000).toString();

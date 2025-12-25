@@ -65,7 +65,10 @@ const userSchema = mongoose.Schema({
   testScore: { type: Number },
 
   // Agent System (Murabaha Intermediary)
-  isAgent: { type: Boolean, default: false }
+  isAgent: { type: Boolean, default: false },
+
+  // Dual Role Linkage
+  linkedProfileId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor' }
 
 }, { timestamps: true });
 
@@ -79,6 +82,12 @@ userSchema.pre('save', async function() {
   if (!this.isModified('password')) {
     return;
   }
+  
+  // If password already looks like a bcrypt hash, don't re-hash
+  if (this.password.startsWith('$2a$') || this.password.startsWith('$2b$')) {
+    return;
+  }
+
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
 });

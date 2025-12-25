@@ -38,6 +38,9 @@ const vendorSchema = mongoose.Schema({
   rating: { type: Number, default: 0 },
   numReviews: { type: Number, default: 0 },
 
+  // Dual Role Linkage
+  linkedProfileId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+
 }, { timestamps: true });
 
 vendorSchema.methods.matchPassword = async function(enteredPassword) {
@@ -48,6 +51,12 @@ vendorSchema.pre('save', async function() {
   if (!this.isModified('password')) {
     return;
   }
+
+  // If password already looks like a bcrypt hash, don't re-hash
+  if (this.password.startsWith('$2a$') || this.password.startsWith('$2b$')) {
+    return;
+  }
+
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
 });
