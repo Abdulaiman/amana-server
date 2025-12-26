@@ -39,7 +39,15 @@ const vendorSchema = mongoose.Schema({
   numReviews: { type: Number, default: 0 },
 
   // Dual Role Linkage
-  linkedProfileId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  linkedProfileId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
+  // Admin Controls
+  isActive: { type: Boolean, default: true },
+  adminNotes: [{
+    content: String,
+    adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    createdAt: { type: Date, default: Date.now }
+  }]
 
 }, { timestamps: true });
 

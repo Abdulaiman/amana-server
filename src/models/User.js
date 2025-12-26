@@ -68,7 +68,19 @@ const userSchema = mongoose.Schema({
   isAgent: { type: Boolean, default: false },
 
   // Dual Role Linkage
-  linkedProfileId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor' }
+  linkedProfileId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor' },
+
+  // Admin Controls
+  isActive: { type: Boolean, default: true }, // For banning
+  adminNotes: [{
+    content: String,
+    adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    createdAt: { type: Date, default: Date.now }
+  }],
+
+  // Password Reset
+  resetPasswordToken: String,
+  resetPasswordExpire: Date
 
 }, { timestamps: true });
 

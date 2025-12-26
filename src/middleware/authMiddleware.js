@@ -35,6 +35,11 @@ const protect = async (req, res, next) => {
         return res.status(401).json({ message: 'Not authorized, user not found' });
       }
 
+      // GLOBAL BAN ENFORCEMENT
+      if (req.user.isActive === false) {
+        return res.status(403).json({ message: 'Account Banned. Contact Support.' });
+      }
+
       next();
     } catch (error) {
       console.error(error);

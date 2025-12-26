@@ -15,7 +15,16 @@ const {
     getAllRetailers,
     getAllAgents,
     toggleAgentStatus,
-    searchRetailers
+    searchRetailers,
+    getUniversalSearch,
+    getAdvancedFinancials,
+    getUserFullProfile,
+    manualLedgerEntry,
+    toggleAccountStatus,
+
+    getAuditLogs,
+    getDebtors,
+    sendBroadcast
 } = require('../controllers/adminController');
 
 // Withdrawals / Payouts
@@ -38,6 +47,16 @@ router.put('/retailer/:id/agent', protect, admin, toggleAgentStatus);
 
 // Agent Management
 router.get('/agents', protect, admin, getAllAgents);
+
+// Operations & Search (God Mode)
+router.get('/search', protect, admin, getUniversalSearch);
+router.get('/financials', protect, admin, getAdvancedFinancials);
+router.get('/user/:id/full', protect, admin, getUserFullProfile);
+router.post('/ledger', protect, admin, manualLedgerEntry);
+router.put('/user/:id/status', protect, admin, toggleAccountStatus);
+router.get('/audit-logs', protect, admin, getAuditLogs);
+router.get('/debtors', protect, admin, getDebtors);
+router.post('/broadcast', protect, admin, sendBroadcast);
 
 // Analytics
 router.get('/analytics', protect, admin, getAdminAnalytics);
