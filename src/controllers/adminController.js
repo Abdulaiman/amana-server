@@ -322,12 +322,33 @@ const getAdvancedFinancials = async (req, res) => {
         { $group: { _id: null, totalPaid: { $sum: '$amount' } } }
     ]);
 
-    // 4. Pending Payouts (Vendor Wallet Liability - Money held by system)
+    // 4. Vendor Wallet Liability (Money held by system for Vendors)
     const vendorLiability = await Vendor.aggregate([
         { $group: { _id: null, totalWallet: { $sum: '$walletBalance' } } }
     ]);
 
-    // 5. Manual Adjustments (Credits/Debits by Admin)
+    // 5. Retailer Credit Capacity
+    const retailerCredit = await User.aggregate([
+        { $match: { role: 'retailer' } },
+        { $group: { 
+            _id: null, 
+            totalCreditLimit: { $sum: '$creditLimit' },
+            totalUsedCredit: { $sum: '$usedCredit' }
+        }}
+    ]);
+
+    // 6. Overdue Debt (Past Due Date)
+    const now = new Date();
+    const overdueStats = await Order.aggregate([
+        { $match: { 
+            status: { $in: ['goods_received', 'vendor_settled', 'defaulted'] }, 
+            isPaid: false,
+            dueDate: { $lt: now }
+        }},
+        { $group: { _id: null, totalOverdue: { $sum: '$totalRepaymentAmount' } } }
+    ]);
+
+    // 7. Manual Adjustments (Credits/Debits by Admin)
     const adjustments = await AuditLog.aggregate([
         { $match: { action: { $in: ['MANUAL_CREDIT', 'MANUAL_DEBIT'] } } },
         { $group: { 
@@ -345,8 +366,12 @@ const getAdvancedFinancials = async (req, res) => {
         principal: stats.principal, // Orders only
         profit: stats.revenue,
         activeDebt: liabilityStats[0]?.totalDebt || 0,
+        overdueDebt: overdueStats[0]?.totalOverdue || 0,
         totalPayouts: payoutStats[0]?.totalPaid || 0,
         pendingPayouts: vendorLiability[0]?.totalWallet || 0,
+        totalCreditLimit: retailerCredit[0]?.totalCreditLimit || 0,
+        totalUsedCredit: retailerCredit[0]?.totalUsedCredit || 0,
+        availableCredit: (retailerCredit[0]?.totalCreditLimit || 0) - (retailerCredit[0]?.totalUsedCredit || 0),
         manualAdjustments: netManual, // EXPLAIN THE GAP
         systemHealth: {
             // (Principal + NetManual) should approx equal (Total Payouts + Pending Payouts)
