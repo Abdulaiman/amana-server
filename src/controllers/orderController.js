@@ -68,6 +68,21 @@ const addOrderItems = async (req, res, next) => {
             });
         }
 
+        // AGENT AVAILABILITY CHECK
+        // Ensure there is at least one other agent in the system if the current user is an agent
+        const agentCount = await User.countDocuments({ isAgent: true, _id: { $ne: user._id } });
+        if (agentCount === 0) {
+            if (user.isAgent) {
+                return res.status(400).json({
+                    message: "Self-Dealing Restriction: As the system's current agent, you cannot facilitate your own orders. Since no other agents are available, this purchase cannot be processed."
+                });
+            } else {
+                return res.status(400).json({
+                    message: "Service Interruption: No verification agents are currently available to facilitate this transaction. Please contact Support."
+                });
+            }
+        }
+
         // Decrement stock for each product
         for (const item of orderItems) {
             await Product.findByIdAndUpdate(item.product, {
@@ -162,6 +177,12 @@ const updateOrderToReady = async (req, res, next) => {
         });
 
         if (filteredAgents.length === 0) {
+            const isRetailerAgent = await User.findOne({ _id: order.retailer, isAgent: true });
+            if (isRetailerAgent) {
+                return res.status(400).json({ 
+                    message: 'Self-Dealing Block: The buyer is currently the only available agent. A third-party agent is required to facilitate this Murabaha transaction.' 
+                });
+            }
             return res.status(400).json({ 
                 message: 'No available Agents to facilitate this Murabaha transaction. Please contact Support.' 
             });
@@ -382,6 +403,29 @@ const cancelOrder = async (req, res, next) => {
     }
 };
 
+// @desc    Check Agent Availability
+// @route   GET /api/orders/agent-availability
+// @access  Private
+const checkAgentAvailability = async (req, res, next) => {
+    try {
+        const userId = req.user._id;
+        
+        const totalAgents = await User.countDocuments({ isAgent: true });
+        const otherAgents = await User.countDocuments({ 
+            isAgent: true, 
+            _id: { $ne: userId } 
+        });
+        
+        res.json({
+            totalAgents,
+            otherAgents,
+            isPurchaseFacilitatable: otherAgents > 0
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = { 
     addOrderItems, 
     getOrderById, 
@@ -390,5 +434,6 @@ module.exports = {
     confirmGoodsReceived, 
     updateOrderToCompleted, 
     getMyOrders, 
-    cancelOrder 
+    cancelOrder,
+    checkAgentAvailability
 };

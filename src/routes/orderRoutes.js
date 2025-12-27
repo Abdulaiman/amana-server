@@ -9,11 +9,13 @@ const {
     confirmGoodsReceived, 
     updateOrderToCompleted, 
     getMyOrders, 
-    cancelOrder 
+    cancelOrder,
+    checkAgentAvailability
 } = require('../controllers/orderController');
 
 router.route('/').post(protect, addOrderItems);
 router.route('/myorders').get(protect, getMyOrders);
+router.route('/agent-availability').get(protect, checkAgentAvailability);
 router.route('/:id').get(protect, getOrderById);
 router.route('/:id/ready').put(protect, updateOrderToReady);
 router.route('/:id/settle-vendor').put(protect, settleVendorByAgent); // Phase 1: Agent Settle
