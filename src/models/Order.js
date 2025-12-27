@@ -19,6 +19,7 @@ const orderSchema = mongoose.Schema({
   markupPercentage: { type: Number, required: true }, // e.g. 5
   markupAmount: { type: Number, required: true }, // Calculated markup
   totalRepaymentAmount: { type: Number, required: true }, // itemsPrice + markupAmount
+  repaymentTerm: { type: Number, enum: [3, 7, 14], default: 14 },
   
   // Status flow
   status: { 

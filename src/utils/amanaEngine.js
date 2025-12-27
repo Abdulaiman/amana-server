@@ -54,12 +54,27 @@ const determineTier = (score) => {
     return 'Bronze';
 };
 
-// 4. Determine Markup Percentage (Tiered)
-const determineMarkup = (score) => {
-    if (score >= 80) return 5.0;
-    if (score >= 60) return 8.0;
-    if (score >= 40) return 12.0;
-    return 15.0;
+// 4. Determine Markup Percentage (Term-Based Dynamic)
+const determineMarkup = (score, termDays = 14) => {
+    let baseMarkup = 15.0;
+    
+    // 1. Determine Base Markup from Score Tiers
+    if (score >= 80) baseMarkup = 5.0;
+    else if (score >= 60) baseMarkup = 8.0;
+    else if (score >= 40) baseMarkup = 12.0;
+
+    // 2. Apply Term Multiplier
+    // 3 Days: 0.5x (50% discount)
+    // 7 Days: 0.75x (25% discount)
+    // 14 Days: 1.0x (Standard)
+    let termMultiplier = 1.0;
+    if (termDays <= 3) termMultiplier = 0.5;
+    else if (termDays <= 7) termMultiplier = 0.75;
+
+    let calculatedMarkup = baseMarkup * termMultiplier;
+
+    // 3. Enforce 4.0% Minimum Floor
+    return Math.max(calculatedMarkup, 4.0);
 };
 
 // 5. Calculate Score Growth (Repayment Behavior)

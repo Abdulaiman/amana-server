@@ -10,7 +10,7 @@ const { determineMarkup } = require('../utils/amanaEngine');
 // @access  Private (Retailer)
 const addOrderItems = async (req, res, next) => {
     try {
-        const { orderItems, totalPrice } = req.body;
+        const { orderItems, totalPrice, repaymentTerm = 14 } = req.body;
 
         if (orderItems && orderItems.length === 0) {
             return res.status(400).json({ message: 'No order items' });
@@ -43,8 +43,8 @@ const addOrderItems = async (req, res, next) => {
         // Identify Vendor (Assuming single vendor per order for MVP)
         const vendorId = orderItems[0].vendor; 
 
-        // Murabaha Calculation - Centralized Engine (Tier Based)
-        const markupPercentage = determineMarkup(user.amanaScore);
+        // Murabaha Calculation - Centralized Engine (Term-Based Dynamic)
+        const markupPercentage = determineMarkup(user.amanaScore, repaymentTerm);
         const markupAmount = itemsPrice * (markupPercentage / 100);
         const totalRepayment = itemsPrice + markupAmount;
 
@@ -98,6 +98,7 @@ const addOrderItems = async (req, res, next) => {
             markupPercentage,
             markupAmount,
             totalRepaymentAmount: totalRepayment,
+            repaymentTerm,
             status: 'pending_vendor',
             isPaid: false
         });
@@ -196,9 +197,10 @@ const updateOrderToReady = async (req, res, next) => {
         order.agent = randomAgent._id;
         order.agentAssignedAt = new Date();
         
-        // Set Due Date (14 days from now)
-        const fourteenDays = 14 * 24 * 60 * 60 * 1000;
-        order.dueDate = new Date(Date.now() + fourteenDays);
+        // Set Due Date based on chosen term
+        const termDays = order.repaymentTerm || 14;
+        const termMs = termDays * 24 * 60 * 60 * 1000;
+        order.dueDate = new Date(Date.now() + termMs);
         
         const updatedOrder = await order.save();
         
