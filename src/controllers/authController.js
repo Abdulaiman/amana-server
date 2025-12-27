@@ -44,6 +44,8 @@ const authUser = async (req, res) => {
       isProfileComplete: user.isProfileComplete,
       kyc: user.kyc,
       isAgent: user.isAgent,
+      isActive: user.isActive,
+      isBanned: user.isBanned,
       linkedProfileId: user.linkedProfileId,
       token: generateToken(user._id, user.role),
     });
@@ -78,6 +80,8 @@ const authUser = async (req, res) => {
             verificationStatus: vendor.verificationStatus,
             isProfileComplete: vendor.isProfileComplete,
             isVerified: vendor.isVerified,
+            isActive: vendor.isActive,
+            isBanned: vendor.isBanned,
             linkedProfileId: vendor.linkedProfileId,
             token: generateToken(vendor._id, 'vendor'),
         });
@@ -340,6 +344,8 @@ const switchProfile = async (req, res) => {
       isProfileComplete: user.isProfileComplete,
       kyc: user.kyc,
       isAgent: user.isAgent,
+      isActive: user.isActive,
+      isBanned: user.isBanned,
       linkedProfileId: user.linkedProfileId,
       token: generateToken(user._id, user.role),
     });
@@ -358,6 +364,8 @@ const switchProfile = async (req, res) => {
       verificationStatus: vendor.verificationStatus,
       isProfileComplete: vendor.isProfileComplete,
       isVerified: vendor.isVerified,
+      isActive: vendor.isActive,
+      isBanned: vendor.isBanned,
       token: generateToken(vendor._id, 'vendor'),
     });
   }

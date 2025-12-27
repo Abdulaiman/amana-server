@@ -39,7 +39,9 @@ const getVendorProfile = async (req, res) => {
             rating: vendor.rating,
             totalProducts,
             totalOrders,
-            totalEarnings
+            totalEarnings,
+            isActive: vendor.isActive,
+            isBanned: vendor.isBanned
         });
     } else {
         res.status(404);
@@ -215,7 +217,9 @@ const getVendorDashboard = async (req, res) => {
         verificationStatus: vendor.verificationStatus,
         rejectionReason: vendor.rejectionReason,
         profilePicUrl: vendor.profilePicUrl,
-        bankDetails: vendor.bankDetails
+        bankDetails: vendor.bankDetails,
+        isActive: vendor.isActive,
+        isBanned: vendor.isBanned
     });
 };
 

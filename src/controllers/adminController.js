@@ -464,33 +464,39 @@ const manualLedgerEntry = async (req, res) => {
 // @route   PUT /api/admin/user/:id/status
 const toggleAccountStatus = async (req, res) => {
     const { isActive, note } = req.body;
-    const user = await User.findById(req.params.id);
+    let account = await User.findById(req.params.id);
+    let type = 'User';
 
-    if (!user) {
-        res.status(404);
-        throw new Error('User not found');
+    if (!account) {
+        account = await Vendor.findById(req.params.id);
+        type = 'Vendor';
     }
 
-    user.isActive = isActive;
+    if (!account) {
+        res.status(404);
+        throw new Error('User or Vendor not found');
+    }
+
+    account.isActive = isActive;
     
     if (note) {
-        user.adminNotes.push({
+        account.adminNotes.push({
             content: `Account ${isActive ? 'activated' : 'deactivated'}: ${note}`,
             adminId: req.user._id
         });
     }
 
-    await user.save();
+    await account.save();
 
     await AuditLog.create({
         admin: req.user._id,
-        action: isActive ? 'ACTIVATE_USER' : 'BAN_USER',
-        targetId: user._id,
-        targetType: 'User',
+        action: isActive ? 'ACTIVATE_ACCOUNT' : 'BAN_ACCOUNT',
+        targetId: account._id,
+        targetType: type,
         note
     });
 
-    res.json({ success: true, isActive: user.isActive });
+    res.json({ success: true, isActive: account.isActive, isBanned: !account.isActive });
 };
 
 // @desc    Get Audit Logs

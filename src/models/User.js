@@ -82,7 +82,16 @@ const userSchema = mongoose.Schema({
   resetPasswordToken: String,
   resetPasswordExpire: Date
 
-}, { timestamps: true });
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+// Virtual for isBanned
+userSchema.virtual('isBanned').get(function() {
+  return !this.isActive;
+});
 
 // Password Match
 userSchema.methods.matchPassword = async function(enteredPassword) {

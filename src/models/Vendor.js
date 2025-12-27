@@ -49,7 +49,16 @@ const vendorSchema = mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
   }]
 
-}, { timestamps: true });
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+// Virtual for isBanned
+vendorSchema.virtual('isBanned').get(function() {
+  return !this.isActive;
+});
 
 vendorSchema.methods.matchPassword = async function(enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);

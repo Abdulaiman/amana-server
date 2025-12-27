@@ -186,7 +186,9 @@ const getRetailerProfile = async (req, res) => {
             
             kyc: user.kyc,
             hasTakenTest: user.hasTakenTest,
-            isAgent: user.isAgent
+            isAgent: user.isAgent,
+            isActive: user.isActive,
+            isBanned: user.isBanned
         });
     } else {
         res.status(404);

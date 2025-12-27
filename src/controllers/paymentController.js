@@ -11,7 +11,6 @@ const processPaymentUpdate = async (data, reference) => {
     // 0. IDEMPOTENCY CHECK
     const existingTx = await Transaction.findOne({ reference });
     if (existingTx) {
-        console.log(`Duplicate verify call for ${reference}. Skipping DB updates.`);
         return { 
             alreadyProcessed: true, 
             amountPaid: existingTx.amount,
