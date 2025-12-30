@@ -5,9 +5,10 @@ const cloudinary = require('../utils/cloudinary');
 
 const fs = require('fs');
 
-router.post('/', upload.array('files', 10), async (req, res) => {
+// Update to support both 'files' (array) and 'image' (single)
+router.post('/', upload.fields([{ name: 'files', maxCount: 10 }, { name: 'image', maxCount: 1 }]), async (req, res) => {
   try {
-    const files = req.files;
+    const files = req.files.files || req.files.image || [];
 
     if (!files || files.length === 0) {
         return res.status(400).json({ message: 'No files uploaded' });
@@ -40,12 +41,18 @@ router.post('/', upload.array('files', 10), async (req, res) => {
     });
 
     const urls = await Promise.all(uploadPromises);
-    res.json(urls);
+    
+    // Return single URL if it was a single image upload, otherwise return array
+    if (req.files.image) {
+        res.json({ url: urls[0] });
+    } else {
+        res.json(urls);
+    }
   } catch (error) {
      console.error('Cloudinary Upload Error:', error);
      // Clean up any remaining files if main process fails
      if (req.files) {
-         req.files.forEach(file => {
+         Object.values(req.files).flat().forEach(file => {
              if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
          });
      }

@@ -4,6 +4,7 @@ const Order = require('../models/Order');
 const Transaction = require('../models/Transaction');
 const WithdrawalRequest = require('../models/WithdrawalRequest');
 const AuditLog = require('../models/AuditLog');
+const AgentPurchase = require('../models/AgentPurchase');
 const sendEmail = require('../utils/emailService');
 
 // @desc    Get All Withdrawal Requests
@@ -197,19 +198,23 @@ const getAdminAnalytics = async (req, res) => {
     const totalVendors = await Vendor.countDocuments();
     const totalUsers = await User.countDocuments();
     const orders = await Order.countDocuments();
+    const totalAAP = await AgentPurchase.countDocuments();
     const pendingPayouts = await WithdrawalRequest.countDocuments({ status: 'pending' });
     
     // Updated visibility of pending verifications
     const pendingVendorVerifications = await Vendor.countDocuments({ isProfileComplete: true, verificationStatus: 'pending' });
     const pendingRetailerVerifications = await User.countDocuments({ role: 'retailer', verificationStatus: 'pending' });
+    const pendingAAPCount = await AgentPurchase.countDocuments({ status: 'pending_admin_approval' });
     
     res.json({
         totalVendors,
         totalUsers,
         totalOrders: orders,
+        totalAAP,
         pendingPayouts,
         pendingVendorVerifications,
-        pendingRetailerVerifications
+        pendingRetailerVerifications,
+        pendingAAPCount
     });
 };
 
@@ -297,30 +302,59 @@ const getUniversalSearch = async (req, res) => {
 // @desc    Get Advanced Financial Analytics
 // @route   GET /api/admin/financials
 const getAdvancedFinancials = async (req, res) => {
-    // 1. Total Volume (Items Price + Markup) of ALL DELIVERED orders (Completed + Active Debt)
-    const volumeStats = await Order.aggregate([
+    // 1. Total Volume (Items Price + Markup) of ALL DELIVERED transactions (Completed + Active Debt)
+    const orderVolume = await Order.aggregate([
         { $match: { status: { $in: ['completed', 'repaid', 'goods_received', 'vendor_settled'] } } },
         { $group: {
             _id: null,
             totalVolume: { $sum: '$totalRepaymentAmount' },
-            principal: { $sum: '$itemsPrice' }, // Money Out (to Vendors)
-            revenue: { $sum: '$markupAmount' }   // Profit
+            principal: { $sum: '$itemsPrice' },
+            revenue: { $sum: '$markupAmount' }
         }}
     ]);
 
-    const stats = volumeStats[0] || { totalVolume: 0, principal: 0, revenue: 0 };
+    const aapVolume = await AgentPurchase.aggregate([
+        { $match: { status: { $in: ['completed', 'received', 'delivered', 'fund_disbursed'] } } },
+        { $group: {
+            _id: null,
+            totalVolume: { $sum: '$totalRetailerCost' },
+            principal: { $sum: '$purchasePrice' },
+            revenue: { $sum: '$markupAmount' }
+        }}
+    ]);
+
+    const ord = orderVolume[0] || { totalVolume: 0, principal: 0, revenue: 0 };
+    const aap = aapVolume[0] || { totalVolume: 0, principal: 0, revenue: 0 };
+
+    const totalVolume = ord.totalVolume + aap.totalVolume;
+    const totalPrincipal = ord.principal + aap.principal;
+    const totalRevenue = ord.revenue + aap.revenue;
 
     // 2. Active Debt (Pending Repayment)
-    const liabilityStats = await Order.aggregate([
+    const orderLiability = await Order.aggregate([
         { $match: { status: { $in: ['goods_received', 'vendor_settled'] }, isPaid: false } },
         { $group: { _id: null, totalDebt: { $sum: '$totalRepaymentAmount' } } }
     ]);
 
-    // 3. Total Payouts (Real Cash Out - Approved Withdrawals)
-    const payoutStats = await WithdrawalRequest.aggregate([
+    const aapLiability = await AgentPurchase.aggregate([
+        { $match: { status: { $in: ['received', 'delivered'] }, isPaid: false } }, // fund_disbursed is exposure but not yet "debt" in retailer's view usually? No, it's out of amana's pocket so it IS liability.
+        { $group: { _id: null, totalDebt: { $sum: '$totalRetailerCost' } } }
+    ]);
+
+    const totalActiveDebt = (orderLiability[0]?.totalDebt || 0) + (aapLiability[0]?.totalDebt || 0);
+
+    // 3. Total Payouts (Real Cash Out - Approved Withdrawals + AAP Disbursements)
+    const withdrawalStats = await WithdrawalRequest.aggregate([
         { $match: { status: 'approved' } },
         { $group: { _id: null, totalPaid: { $sum: '$amount' } } }
     ]);
+
+    const aapDisbursementStats = await AgentPurchase.aggregate([
+        { $match: { status: { $in: ['fund_disbursed', 'delivered', 'received', 'completed'] } } },
+        { $group: { _id: null, totalDisbursed: { $sum: '$purchasePrice' } } }
+    ]);
+
+    const totalPayouts = (withdrawalStats[0]?.totalPaid || 0) + (aapDisbursementStats[0]?.totalDisbursed || 0);
 
     // 4. Vendor Wallet Liability (Money held by system for Vendors)
     const vendorLiability = await Vendor.aggregate([
@@ -339,7 +373,7 @@ const getAdvancedFinancials = async (req, res) => {
 
     // 6. Overdue Debt (Past Due Date)
     const now = new Date();
-    const overdueStats = await Order.aggregate([
+    const orderOverdue = await Order.aggregate([
         { $match: { 
             status: { $in: ['goods_received', 'vendor_settled', 'defaulted'] }, 
             isPaid: false,
@@ -348,7 +382,18 @@ const getAdvancedFinancials = async (req, res) => {
         { $group: { _id: null, totalOverdue: { $sum: '$totalRepaymentAmount' } } }
     ]);
 
-    // 7. Manual Adjustments (Credits/Debits by Admin)
+    const aapOverdue = await AgentPurchase.aggregate([
+        { $match: { 
+            status: 'received', // AAP only has dueDate once received? No, check model. receivedAt starts the clock.
+            isPaid: false,
+            dueDate: { $lt: now }
+        }},
+        { $group: { _id: null, totalOverdue: { $sum: '$totalRetailerCost' } } }
+    ]);
+
+    const totalOverdue = (orderOverdue[0]?.totalOverdue || 0) + (aapOverdue[0]?.totalOverdue || 0);
+
+    // 7. Manual Adjustments
     const adjustments = await AuditLog.aggregate([
         { $match: { action: { $in: ['MANUAL_CREDIT', 'MANUAL_DEBIT'] } } },
         { $group: { 
@@ -362,21 +407,20 @@ const getAdvancedFinancials = async (req, res) => {
     const netManual = manualCredits - manualDebits;
 
     res.json({
-        volume: stats.totalVolume,
-        principal: stats.principal, // Orders only
-        profit: stats.revenue,
-        activeDebt: liabilityStats[0]?.totalDebt || 0,
-        overdueDebt: overdueStats[0]?.totalOverdue || 0,
-        totalPayouts: payoutStats[0]?.totalPaid || 0,
+        volume: totalVolume,
+        principal: totalPrincipal,
+        profit: totalRevenue,
+        activeDebt: totalActiveDebt,
+        overdueDebt: totalOverdue,
+        totalPayouts: totalPayouts,
         pendingPayouts: vendorLiability[0]?.totalWallet || 0,
         totalCreditLimit: retailerCredit[0]?.totalCreditLimit || 0,
         totalUsedCredit: retailerCredit[0]?.totalUsedCredit || 0,
         availableCredit: (retailerCredit[0]?.totalCreditLimit || 0) - (retailerCredit[0]?.totalUsedCredit || 0),
-        manualAdjustments: netManual, // EXPLAIN THE GAP
+        manualAdjustments: netManual,
         systemHealth: {
-            // (Principal + NetManual) should approx equal (Total Payouts + Pending Payouts)
-            moneyInSystem: stats.principal + netManual,
-            moneyLiability: (payoutStats[0]?.totalPaid || 0) + (vendorLiability[0]?.totalWallet || 0)
+            moneyInSystem: totalPrincipal + netManual, // Money sent to vendors OR disbursed for AAPs
+            moneyLiability: totalPayouts + (vendorLiability[0]?.totalWallet || 0)
         }
     });
 };
@@ -537,13 +581,13 @@ const getAuditLogs = async (req, res) => {
 // @desc    Get Debtors (Aging Analysis)
 // @route   GET /api/admin/debtors
 const getDebtors = async (req, res) => {
-    // Find orders that are active debt
+    // 1. Marketplace Debtors
     const activeOrders = await Order.find({
         status: { $in: ['goods_received', 'vendor_settled'] },
         isPaid: false
     }).populate('retailer', 'name phone email creditLimit');
 
-    const debtors = activeOrders.map(order => {
+    const orderDebtors = activeOrders.map(order => {
         const dueDate = new Date(order.dueDate);
         const today = new Date();
         const diffTime = dueDate - today;
@@ -551,6 +595,7 @@ const getDebtors = async (req, res) => {
 
         return {
             orderId: order._id,
+            type: 'Marketplace',
             user: order.retailer,
             amount: order.totalRepaymentAmount,
             dueDate: order.dueDate,
@@ -558,6 +603,32 @@ const getDebtors = async (req, res) => {
             isCritical: diffDays <= 3
         };
     });
+
+    // 2. AAP Debtors
+    const activeAAPs = await AgentPurchase.find({
+        status: { $in: ['received', 'delivered'] },
+        isPaid: false
+    }).populate('retailer', 'name phone email creditLimit');
+
+    const aapDebtors = activeAAPs.map(aap => {
+        const dueDate = aap.dueDate ? new Date(aap.dueDate) : null;
+        const today = new Date();
+        const diffTime = dueDate ? (dueDate - today) : null;
+        const diffDays = diffTime !== null ? Math.ceil(diffTime / (1000 * 60 * 60 * 24)) : 99; 
+
+        return {
+            orderId: aap._id,
+            type: 'AAP',
+            productName: aap.productName,
+            user: aap.retailer,
+            amount: aap.totalRetailerCost,
+            dueDate: aap.dueDate,
+            daysRemaining: diffDays,
+            isCritical: diffDays <= 3
+        };
+    });
+
+    const debtors = [...orderDebtors, ...aapDebtors];
 
     // Sort by urgency (lowest days remaining first)
     debtors.sort((a, b) => a.daysRemaining - b.daysRemaining);

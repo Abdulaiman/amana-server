@@ -200,44 +200,71 @@ const getRetailerProfile = async (req, res) => {
 // @route   GET /api/retailer/stats
 // @access  Private
 const getRetailerStats = async (req, res) => {
-    const Order = require('../models/Order');
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    try {
+        const Order = require('../models/Order');
+        const AgentPurchase = require('../models/AgentPurchase');
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    const stats = await Order.aggregate([
-        {
-            $match: {
-                retailer: req.user._id,
-                createdAt: { $gte: sevenDaysAgo }
+        // Fetch Order Stats
+        const orderStats = await Order.aggregate([
+            {
+                $match: {
+                    retailer: req.user._id,
+                    createdAt: { $gte: sevenDaysAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                    totalSpent: { $sum: "$itemsPrice" }
+                }
             }
-        },
-        {
-            $group: {
-                _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-                totalSpent: { $sum: "$itemsPrice" }
-            }
-        },
-        { $sort: { "_id": 1 } }
-    ]);
+        ]);
 
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const formattedStats = [];
-    
-    for (let i = 6; i >= 0; i--) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        const dateStr = date.toISOString().split('T')[0];
-        const dayIndex = date.getDay();
-        const dayName = days[dayIndex];
+        // Fetch AAP Stats
+        const aapStats = await AgentPurchase.aggregate([
+            {
+                $match: {
+                    retailer: req.user._id,
+                    createdAt: { $gte: sevenDaysAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                    totalSpent: { $sum: "$purchasePrice" }
+                }
+            }
+        ]);
+
+        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const formattedStats = [];
         
-        const dayStat = stats.find(s => s._id === dateStr);
-        formattedStats.push({
-            label: dayName,
-            value: dayStat ? dayStat.totalSpent : 0
-        });
-    }
+        for (let i = 6; i >= 0; i--) {
+            const date = new Date();
+            date.setDate(date.getDate() - i);
+            const dateStr = date.toISOString().split('T')[0];
+            const dayIndex = date.getDay();
+            const dayName = days[dayIndex];
+            
+            const dayOrderStat = orderStats.find(s => s._id === dateStr);
+            const dayAapStat = aapStats.find(s => s._id === dateStr);
+            
+            const totalOnDay = (dayOrderStat ? dayOrderStat.totalSpent : 0) + 
+                               (dayAapStat ? dayAapStat.totalSpent : 0);
 
-    res.json(formattedStats);
+            formattedStats.push({
+                label: dayName,
+                value: totalOnDay
+            });
+        }
+
+        res.json(formattedStats);
+    } catch (error) {
+        console.error('Stats Error:', error);
+        res.status(500).json({ message: error.message });
+    }
 };
 
 module.exports = { submitOnboarding, completeProfile, updateProfile, getRetailerProfile, getRetailerStats };

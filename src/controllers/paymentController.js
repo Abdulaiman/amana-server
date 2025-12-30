@@ -1,6 +1,7 @@
 const axios = require('axios');
 const User = require('../models/User');
 const Order = require('../models/Order');
+const AgentPurchase = require('../models/AgentPurchase');
 const Transaction = require('../models/Transaction');
 const { calculateScoreGrowth, determineCreditLimit, determineTier } = require('../utils/amanaEngine');
 
@@ -36,35 +37,72 @@ const processPaymentUpdate = async (data, reference) => {
 
     // Process Repayment Logic
     let remainingPayment = amountPaid;
-    let ordersRepaidCount = 0;
-    let ordersToProcess = [];
+    let itemsRepaidCount = 0;
+    let itemsToProcess = [];
 
     if (metadata.orderId) {
+        // Try Order first
         const specificOrder = await Order.findOne({ 
             _id: metadata.orderId, 
             retailer: user._id,
             isPaid: false
         });
-        if (specificOrder) ordersToProcess.push(specificOrder);
+        if (specificOrder) {
+            itemsToProcess.push({ doc: specificOrder, type: 'order' });
+        } else {
+            // Try AgentPurchase if not an Order
+            const specificAAP = await AgentPurchase.findOne({
+                _id: metadata.orderId,
+                retailer: user._id,
+                isPaid: false
+            });
+            if (specificAAP) itemsToProcess.push({ doc: specificAAP, type: 'aap' });
+        }
     } else {
-        const query = { 
+        // General Repayment: Fetch both and sort by due date
+        const queryOrders = { 
             retailer: user._id, 
             status: { $in: ['ready_for_pickup', 'goods_received', 'completed', 'defaulted'] }, 
             isPaid: false 
         };
-        const otherOrders = await Order.find(query).sort({ dueDate: 1 });
-        ordersToProcess = otherOrders;
+        const activeOrders = await Order.find(queryOrders);
+        
+        const queryAAPs = {
+            retailer: user._id,
+            status: 'received',
+            isPaid: false
+        };
+        const activeAAPs = await AgentPurchase.find(queryAAPs);
+
+        // Merge and sort
+        itemsToProcess = [
+            ...activeOrders.map(o => ({ doc: o, type: 'order', dueDate: o.dueDate, amount: o.totalRepaymentAmount })),
+            ...activeAAPs.map(a => ({ doc: a, type: 'aap', dueDate: a.dueDate, amount: a.totalRetailerCost }))
+        ].sort((a, b) => {
+            if (!a.dueDate) return -1;
+            if (!b.dueDate) return 1;
+            return new Date(a.dueDate) - new Date(b.dueDate);
+        });
     }
 
-    for (const order of ordersToProcess) {
+    for (const item of itemsToProcess) {
         if (remainingPayment <= 0.5) break;
-        if (remainingPayment >= (order.totalRepaymentAmount - 0.5)) { 
-            order.status = 'repaid';
-            order.isPaid = true;
-            order.repaymentDate = new Date();
-            await order.save();
-            remainingPayment -= order.totalRepaymentAmount;
-            ordersRepaidCount++;
+        const doc = item.doc;
+        const amountDue = item.type === 'order' ? doc.totalRepaymentAmount : doc.totalRetailerCost;
+
+        if (remainingPayment >= (amountDue - 0.5)) { 
+            if (item.type === 'order') {
+                doc.status = 'repaid';
+                doc.isPaid = true;
+                doc.repaymentDate = new Date();
+            } else {
+                doc.status = 'completed';
+                doc.isPaid = true;
+                doc.paidAt = new Date();
+            }
+            await doc.save();
+            remainingPayment -= amountDue;
+            itemsRepaidCount++;
         }
     }
 
@@ -97,7 +135,7 @@ const processPaymentUpdate = async (data, reference) => {
         alreadyProcessed: false,
         amountPaid,
         user,
-        ordersRepaidCount
+        itemsRepaidCount
     };
 };
 
@@ -171,7 +209,7 @@ const verifyPayment = async (req, res) => {
                 newLimit: result.user.creditLimit,
                 newScore: result.user.amanaScore,
                 newTier: result.user.tier,
-                ordersRepaid: result.ordersRepaidCount
+                itemsRepaid: result.itemsRepaidCount
             });
         } else {
             res.status(400).json({ message: 'Payment verification failed at Paystack' });

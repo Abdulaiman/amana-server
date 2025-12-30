@@ -54,6 +54,9 @@ app.use('/api/payment', paymentRoutes);
 const transactionRoutes = require('./src/routes/transactionRoutes');
 app.use('/api/transactions', transactionRoutes);
 
+const agentPurchaseRoutes = require('./src/routes/agentPurchaseRoutes');
+app.use('/api/aap', agentPurchaseRoutes);
+
 // Static uploads folder
 app.use('/uploads', express.static(path.join(__dirname, '/uploads')));
 
