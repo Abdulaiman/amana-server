@@ -51,6 +51,12 @@ const agentPurchaseSchema = mongoose.Schema({
   // Security
   pickupCode: { type: String }, // 6-digit OTP for receipt confirmation
   
+  // Proxy Actions (Agent-led overrides)
+  proxyConfirmation: { type: Boolean, default: false }, // Agent confirmed for Retailer
+  proxyReceipt: { type: Boolean, default: false }, // Agent confirmed delivery for Retailer
+  proxyProofUrl: { type: String }, // Photo proof for proxy actions
+
+  
   // Timer for 1-hour window
   fundDisbursedAt: { type: Date },
   expiresAt: { type: Date },

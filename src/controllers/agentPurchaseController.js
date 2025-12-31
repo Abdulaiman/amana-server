@@ -428,6 +428,121 @@ const confirmReceipt = async (req, res, next) => {
     }
 };
 
+// @desc    Agent Proxy Confirmation (Confirm for Retailer)
+// @route   PUT /api/aap/:id/proxy-confirm
+// @access  Private (Agent)
+const proxyConfirmAAP = async (req, res, next) => {
+    try {
+        const { photoProof } = req.body; // URL from Cloudinary
+
+        if (!photoProof) {
+            return res.status(400).json({ message: 'Photo proof is required for proxy confirmation' });
+        }
+
+        const aap = await AgentPurchase.findById(req.params.id);
+        
+        if (!aap) {
+            return res.status(404).json({ message: 'Agent purchase not found' });
+        }
+
+        if (aap.agent.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Only the creating agent can perform proxy confirmation' });
+        }
+
+        if (aap.status !== 'awaiting_retailer_confirm') {
+            return res.status(400).json({ message: 'This purchase is not awaiting confirmation' });
+        }
+
+        // Apply Proxy Logic
+        aap.status = 'pending_admin_approval';
+        aap.retailerConfirmedAt = new Date();
+        aap.proxyConfirmation = true;
+        aap.proxyProofUrl = photoProof;
+
+        const updated = await aap.save();
+        
+        await updated.populate('retailer', 'name phone email businessInfo');
+        await updated.populate('agent', 'name phone email');
+
+        res.json({
+            message: 'Proxy Confirmed! Request sent to admin for approval.',
+            aap: updated
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Agent Proxy Delivery (Mark Received for Retailer)
+// @route   PUT /api/aap/:id/proxy-deliver
+// @access  Private (Agent)
+const proxyDeliverAAP = async (req, res, next) => {
+    try {
+        const { photoProof } = req.body;
+
+        if (!photoProof) {
+            return res.status(400).json({ message: 'Photo proof is required for proxy delivery' });
+        }
+
+        const aap = await AgentPurchase.findById(req.params.id);
+        
+        if (!aap) {
+            return res.status(404).json({ message: 'Agent purchase not found' });
+        }
+
+        if (aap.agent.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Only the creating agent can perform proxy delivery' });
+        }
+
+        if (aap.status !== 'delivered' && aap.status !== 'fund_disbursed') {
+            return res.status(400).json({ message: 'Goods must be funded or delivered first' });
+        }
+
+        // Lock retailer's credit
+        const retailer = await User.findById(aap.retailer);
+        retailer.usedCredit += aap.totalRetailerCost;
+        await retailer.save();
+
+        // Set due date
+        const termDays = aap.repaymentTerm || 14;
+        const dueDate = new Date(Date.now() + termDays * 24 * 60 * 60 * 1000);
+
+        // If skipping 'delivered' state, set timestamp
+        if (aap.status === 'fund_disbursed') {
+            aap.deliveredAt = new Date();
+        }
+
+        aap.status = 'received';
+        aap.receivedAt = new Date();
+        aap.dueDate = dueDate;
+        aap.proxyReceipt = true;
+        aap.proxyProofUrl = photoProof; // Overwrite initial proof if any, or maybe append? Single field sufficient for now.
+
+        const updated = await aap.save();
+
+        // Log transaction
+        await Transaction.create({
+            user: retailer._id,
+            type: 'loan_disbursement',
+            amount: aap.totalRetailerCost,
+            description: `AAP Credit Lock (Proxy) - ${aap.productName} (${aap.repaymentTerm} days)`,
+            status: 'success',
+            agentPurchaseId: aap._id
+        });
+
+        await updated.populate('retailer', 'name phone email');
+        await updated.populate('agent', 'name phone email');
+
+        res.json({
+            message: 'Proxy Receipt Confirmed! Credit has been locked.',
+            dueDate,
+            aap: updated
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 // @desc    Get AAP by ID
 // @route   GET /api/aap/:id
 // @access  Private
@@ -508,7 +623,7 @@ const getAdminDashboard = async (req, res, next) => {
         }
 
         const aaps = await AgentPurchase.find(query)
-            .populate('retailer', 'name phone email businessInfo amanaScore creditLimit usedCredit')
+            .populate('retailer', 'name phone email businessInfo amanaScore creditLimit usedCredit kyc.profilePicUrl')
             .populate('agent', 'name phone email')
             .populate('approvedBy', 'name')
             .sort({ createdAt: -1 });
@@ -625,5 +740,7 @@ module.exports = {
     getAdminDashboard,
     getExpiredAAPs,
     searchRetailers,
-    findRetailerByPhone
+    findRetailerByPhone,
+    proxyConfirmAAP,
+    proxyDeliverAAP
 };

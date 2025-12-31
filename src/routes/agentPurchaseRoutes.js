@@ -15,7 +15,9 @@ const {
     getAdminDashboard,
     getExpiredAAPs,
     searchRetailers,
-    findRetailerByPhone
+    findRetailerByPhone,
+    proxyConfirmAAP,
+    proxyDeliverAAP
 } = require('../controllers/agentPurchaseController');
 
 // Agent Routes
@@ -24,7 +26,12 @@ router.put('/:id/link-retailer', protect, linkRetailer);
 router.get('/agent/queue', protect, getAgentQueue);
 router.put('/:id/deliver', protect, markDelivered);
 router.get('/search-retailers', protect, searchRetailers);
+router.get('/search-retailers', protect, searchRetailers);
 router.get('/find-retailer', protect, findRetailerByPhone);
+
+// Proxy Routes
+router.put('/:id/proxy-confirm', protect, proxyConfirmAAP);
+router.put('/:id/proxy-deliver', protect, proxyDeliverAAP);
 
 // Retailer Routes
 router.put('/:id/confirm', protect, retailerConfirm);

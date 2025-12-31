@@ -38,13 +38,13 @@ const calculateInitialScore = (testScore, businessData) => {
 };
 
 // 2. Determine Credit Limit (Linear Formula)
-// Formula: Score * 300 (Capped at 30k)
+// Formula: Score * 600 (Capped at 60k)
 // Threshold: Score < 40 gets 0 limit.
 const determineCreditLimit = (score) => {
     if (score < 40) return 0;
     
-    const calculatedLimit = score * 300;
-    return Math.min(calculatedLimit, 30000); // Strict Max 30k
+    const calculatedLimit = score * 600;
+    return Math.min(calculatedLimit, 60000); // Strict Max 60k
 };
 
 // 3. Determine Tier from Score

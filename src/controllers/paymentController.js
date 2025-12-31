@@ -121,14 +121,29 @@ const processPaymentUpdate = async (data, reference) => {
     await user.save();
 
     // Log Transaction
+    // Log Transaction
+    const isProxy = metadata.isAgentProxy || false;
+    let description = `Repayment: ₦${amountPaid}. Score: ${user.amanaScore} (${user.tier}).`;
+    
+    if (isProxy && metadata.payerId) {
+        const payer = await User.findById(metadata.payerId);
+        if (payer) {
+            description += ` (Paid via Agent: ${payer.name})`;
+        }
+    }
+
     await Transaction.create({
         user: user._id,
-        type: 'repayment',
+        type: 'repayment', // or 'repayment_proxy' if we want specific type
         amount: amountPaid,
-        description: `Repayment: ₦${amountPaid}. Score: ${user.amanaScore} (${user.tier}).`,
+        description: description,
         status: 'success',
         reference: reference,
-        orderId: metadata.orderId || null 
+        orderId: metadata.orderId || null,
+        metadata: {
+            payerId: metadata.payerId,
+            isProxy: isProxy
+        }
     });
 
     return {
@@ -291,4 +306,52 @@ const verifyPaymentAndRedirect = async (req, res) => {
     }
 };
 
-module.exports = { initializePayment, verifyPayment, verifyPaymentAndRedirect };
+// @desc    Agent/Admin settles debt for a retailer
+// @route   POST /api/payment/settle-for-retailer
+// @access  Private (Agent/Admin)
+const settleForRetailer = async (req, res) => {
+    try {
+        const { amount, retailerId, email, callbackUrl } = req.body;
+
+        if (!req.user.isAgent && req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Not authorized to settle for others' });
+        }
+
+        const retailer = await User.findById(retailerId);
+        if (!retailer) {
+            return res.status(404).json({ message: 'Retailer not found' });
+        }
+
+        // Use Agent's email for the payment receipt sent by Paystack
+        const payerEmail = email || req.user.email;
+
+        // Construct Paystack params with overrides
+        const params = {
+            email: payerEmail,
+            amount: amount * 100,
+            callback_url: callbackUrl || 'https://joinamana.com/payment/callback',
+            metadata: {
+                userId: retailer._id.toString(), // The Retailer gets the credit
+                payerId: req.user._id.toString(), // The Agent paid
+                isAgentProxy: true,
+                appPrefix: req.body.appPrefix || 'amana://'
+            }
+        };
+
+        const config = {
+            headers: {
+                Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+                'Content-Type': 'application/json'
+            }
+        };
+
+        const response = await axios.post('https://api.paystack.co/transaction/initialize', params, config);
+        res.json(response.data.data);
+
+    } catch (error) {
+        console.error('Agent Settlement Init Error:', error.response?.data || error.message);
+        res.status(500).json({ message: 'Settlement initialization failed' });
+    }
+};
+
+module.exports = { initializePayment, verifyPayment, verifyPaymentAndRedirect, settleForRetailer };
