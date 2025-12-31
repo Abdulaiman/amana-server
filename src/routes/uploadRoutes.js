@@ -5,8 +5,10 @@ const cloudinary = require('../utils/cloudinary');
 
 const fs = require('fs');
 
+const { protect } = require('../middleware/authMiddleware');
+
 // Update to support both 'files' (array) and 'image' (single)
-router.post('/', upload.fields([{ name: 'files', maxCount: 10 }, { name: 'image', maxCount: 1 }]), async (req, res) => {
+router.post('/', protect, upload.fields([{ name: 'files', maxCount: 10 }, { name: 'image', maxCount: 1 }]), async (req, res) => {
   try {
     const files = req.files.files || req.files.image || [];
 

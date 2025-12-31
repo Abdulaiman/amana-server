@@ -249,7 +249,10 @@ const verifyPaymentAndRedirect = async (req, res) => {
         );
 
         const data = response.data.data;
-        const appPrefix = data.metadata?.appPrefix || 'amana://';
+        const rawPrefix = data.metadata?.appPrefix || 'amana://';
+        // XSS & Open Redirect Protection: Allow only http, https, or amana protocols
+        const appPrefix = /^(http|https|amana):\/\//.test(rawPrefix) ? rawPrefix : 'amana://';
+        
         let status = 'failed';
 
         if (data.status === 'success') {
@@ -257,7 +260,12 @@ const verifyPaymentAndRedirect = async (req, res) => {
                 await processPaymentUpdate(data, reference);
                 status = 'success';
             } catch (err) {
-                console.error('Process Payment Update Error:', err.message);
+                // If duplicate key error (race condition caught by unique index), treat as success (idempotent)
+                if (err.code === 11000 || err.message.includes('already processed')) {
+                    status = 'success';
+                } else {
+                    console.error('Process Payment Update Error:', err.message);
+                }
             }
         }
 

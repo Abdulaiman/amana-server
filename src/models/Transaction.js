@@ -19,7 +19,7 @@ const transactionSchema = mongoose.Schema({
   },
   amount: { type: Number, required: true },
   description: { type: String },
-  reference: { type: String }, // Paystack ref or internal ID
+  reference: { type: String, unique: true }, // Paystack ref or internal ID
   status: { type: String, enum: ['pending', 'success', 'failed'], default: 'success' },
   
   orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
