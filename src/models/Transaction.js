@@ -13,7 +13,8 @@ const transactionSchema = mongoose.Schema({
       'deposit', 
       'refund',
       'agent_fund_disbursement',  // Admin sends funds to agent for AAP
-      'aap_credit_lock'           // Retailer's credit locked for AAP
+      'aap_credit_lock',          // Retailer's credit locked for AAP
+      'admin_cash_confirmation'   // Admin confirms cash payment received
     ], 
     required: true 
   },

@@ -694,6 +694,135 @@ const sendBroadcast = async (req, res) => {
     });
 };
 
+// @desc    Admin confirms cash payment received (bypasses Paystack)
+// @route   POST /api/admin/confirm-payment
+// @access  Private (Admin Only)
+const { processPaymentUpdate } = require('./paymentController');
+const crypto = require('crypto');
+
+const confirmManualPayment = async (req, res) => {
+    try {
+        const { orderId, orderType, amount, reason } = req.body;
+        
+        // Validation
+        if (!orderId || !orderType || !amount || !reason) {
+            return res.status(400).json({ 
+                message: 'All fields required: orderId, orderType (order/aap), amount, reason' 
+            });
+        }
+
+        if (!['order', 'aap'].includes(orderType)) {
+            return res.status(400).json({ message: 'orderType must be "order" or "aap"' });
+        }
+
+        if (reason.length < 10) {
+            return res.status(400).json({ message: 'Reason must be at least 10 characters for audit trail' });
+        }
+
+        // Find the debt record
+        let debtRecord;
+        let retailerId;
+        let amountDue;
+
+        if (orderType === 'order') {
+            debtRecord = await Order.findById(orderId);
+            if (!debtRecord) return res.status(404).json({ message: 'Order not found' });
+            retailerId = debtRecord.retailer;
+            amountDue = debtRecord.totalRepaymentAmount;
+        } else {
+            debtRecord = await AgentPurchase.findById(orderId);
+            if (!debtRecord) return res.status(404).json({ message: 'AAP not found' });
+            retailerId = debtRecord.retailer;
+            amountDue = debtRecord.totalRetailerCost;
+        }
+
+        // Verify debt is not already paid
+        if (debtRecord.isPaid) {
+            return res.status(400).json({ message: 'This debt has already been paid' });
+        }
+
+        // Verify amount matches (allow small tolerance for rounding)
+        if (Math.abs(amount - amountDue) > 1) {
+            return res.status(400).json({ 
+                message: `Amount mismatch. Expected: ₦${amountDue}, Received: ₦${amount}` 
+            });
+        }
+
+        const user = await User.findById(retailerId);
+        if (!user) return res.status(404).json({ message: 'Retailer not found' });
+
+        // Generate unique reference for this manual payment
+        const uniqueId = crypto.randomBytes(6).toString('hex').toUpperCase();
+        const reference = `ADMIN_CASH_${Date.now()}_${uniqueId}`;
+
+        // Build fake Paystack-like data object for processPaymentUpdate
+        const fakePaystackData = {
+            amount: amountDue * 100, // Convert to Kobo as processPaymentUpdate expects
+            customer: { email: user.email },
+            metadata: {
+                userId: user._id.toString(),
+                orderId: orderId,
+                isAdminCashConfirmation: true,
+                confirmedBy: req.user._id.toString(),
+                reason: reason
+            }
+        };
+
+        // Process payment using the shared logic
+        const result = await processPaymentUpdate(fakePaystackData, reference);
+
+        if (result.alreadyProcessed) {
+            return res.status(400).json({ message: 'This payment was already processed' });
+        }
+
+        // Update the transaction type to 'admin_cash_confirmation' for clarity
+        await Transaction.updateOne(
+            { reference: reference },
+            { 
+                type: 'admin_cash_confirmation',
+                description: `Cash payment confirmed by Admin. Reason: ${reason}. User: ${user.name}`
+            }
+        );
+
+        // Create detailed audit log
+        await AuditLog.create({
+            admin: req.user._id,
+            action: 'ADMIN_CASH_CONFIRMATION',
+            targetId: orderId,
+            targetType: orderType === 'order' ? 'Order' : 'AgentPurchase',
+            details: {
+                retailerId: user._id,
+                retailerName: user.name,
+                retailerPhone: user.phone,
+                amount: amountDue,
+                reference: reference,
+                reason: reason,
+                previousUsedCredit: user.usedCredit + amountDue,
+                newUsedCredit: result.user.usedCredit,
+                newAmanaScore: result.user.amanaScore,
+                newTier: result.user.tier
+            },
+            note: `Admin confirmed cash payment of ₦${amountDue} for ${user.name}. Reason: ${reason}`
+        });
+
+        res.json({
+            success: true,
+            message: `Payment of ₦${amountDue} confirmed for ${user.name}`,
+            reference: reference,
+            updatedUser: {
+                usedCredit: result.user.usedCredit,
+                creditLimit: result.user.creditLimit,
+                amanaScore: result.user.amanaScore,
+                tier: result.user.tier
+            }
+        });
+
+    } catch (error) {
+        console.error('Admin Cash Confirmation Error:', error);
+        res.status(500).json({ message: error.message || 'Failed to confirm payment' });
+    }
+};
+
 module.exports = { 
     getWithdrawalRequests, 
     confirmPayout, 
@@ -717,5 +846,6 @@ module.exports = {
     toggleAccountStatus,
     getAuditLogs,
     getDebtors,
-    sendBroadcast
+    sendBroadcast,
+    confirmManualPayment
 };

@@ -24,7 +24,8 @@ const {
 
     getAuditLogs,
     getDebtors,
-    sendBroadcast
+    sendBroadcast,
+    confirmManualPayment
 } = require('../controllers/adminController');
 
 // Withdrawals / Payouts
@@ -57,6 +58,7 @@ router.put('/user/:id/status', protect, admin, toggleAccountStatus);
 router.get('/audit-logs', protect, admin, getAuditLogs);
 router.get('/debtors', protect, admin, getDebtors);
 router.post('/broadcast', protect, admin, sendBroadcast);
+router.post('/confirm-payment', protect, admin, confirmManualPayment);
 
 // Analytics
 router.get('/analytics', protect, admin, getAdminAnalytics);

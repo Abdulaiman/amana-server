@@ -362,4 +362,4 @@ const settleForRetailer = async (req, res) => {
     }
 };
 
-module.exports = { initializePayment, verifyPayment, verifyPaymentAndRedirect, settleForRetailer };
+module.exports = { initializePayment, verifyPayment, verifyPaymentAndRedirect, settleForRetailer, processPaymentUpdate };
