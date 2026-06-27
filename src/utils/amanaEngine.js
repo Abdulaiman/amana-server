@@ -34,7 +34,7 @@ const calculateInitialScore = (testScore, businessData) => {
     const totalScore = normalizedTestScore + businessScore + kycScore;
     
     // Round and Cap at 100
-    return Math.min(Math.round(totalScore), 100);
+    return Math.min(Math.round(totalScore), 300);
 };
 
 // 2. Determine Credit Limit (Linear Formula)
