@@ -44,7 +44,7 @@ const determineCreditLimit = (score) => {
     if (score < 40) return 0;
     
     const calculatedLimit = score * 600;
-    return Math.min(calculatedLimit, 60000); // Strict Max 60k
+    return Math.min(calculatedLimit, 180000); // Strict Max 180k
 };
 
 // 3. Determine Tier from Score
@@ -89,7 +89,7 @@ const calculateScoreGrowth = (currentScore, repaymentStats) => {
     if (repaymentStats.streak > 10) growth += 2;
     
     const newScore = currentScore + growth;
-    return Math.min(newScore, 100);
+    return Math.min(newScore, 300);
 };
 
 module.exports = { 

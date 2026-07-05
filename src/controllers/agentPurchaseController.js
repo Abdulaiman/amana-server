@@ -83,6 +83,20 @@ const createAAP = async (req, res, next) => {
             aapData.status = 'awaiting_retailer_confirm';
         }
 
+        // Prevent duplicate submissions within a short window (e.g. 15 seconds)
+        const recentAAP = await AgentPurchase.findOne({
+            agent: agent._id,
+            retailer: retailerId || null,
+            productName,
+            purchasePrice,
+            createdAt: { $gte: new Date(Date.now() - 15000) }
+        });
+
+        if (recentAAP) {
+            await recentAAP.populate('retailer', 'name phone email businessInfo amanaScore creditLimit usedCredit');
+            return res.status(201).json(recentAAP);
+        }
+
         const aap = new AgentPurchase(aapData);
         const created = await aap.save();
         res.status(201).json(created);
@@ -184,6 +198,16 @@ const retailerConfirm = async (req, res, next) => {
 
         if (aap.retailer.toString() !== req.user._id.toString()) {
             return res.status(403).json({ message: 'Not authorized' });
+        }
+
+        // Idempotency: if already confirmed, return success
+        if (aap.status === 'pending_admin_approval') {
+            await aap.populate('retailer', 'name phone email businessInfo');
+            await aap.populate('agent', 'name phone email');
+            return res.json({
+                message: 'Confirmed! Request sent to admin for approval.',
+                aap
+            });
         }
 
         if (aap.status !== 'awaiting_retailer_confirm') {
@@ -382,6 +406,17 @@ const confirmReceipt = async (req, res, next) => {
             return res.status(403).json({ message: 'Not authorized' });
         }
 
+        // Idempotency: if already received, return success
+        if (aap.status === 'received' || aap.status === 'completed') {
+            await aap.populate('retailer', 'name phone email');
+            await aap.populate('agent', 'name phone email');
+            return res.json({
+                message: 'Receipt confirmed! Credit has been locked.',
+                dueDate: aap.dueDate,
+                aap
+            });
+        }
+
         if (aap.status !== 'delivered') {
             return res.status(400).json({ message: 'Goods must be marked as delivered first' });
         }
@@ -449,6 +484,16 @@ const proxyConfirmAAP = async (req, res, next) => {
             return res.status(403).json({ message: 'Only the creating agent can perform proxy confirmation' });
         }
 
+        // Idempotency: if already proxy confirmed, return success
+        if (aap.status === 'pending_admin_approval') {
+            await aap.populate('retailer', 'name phone email businessInfo');
+            await aap.populate('agent', 'name phone email');
+            return res.json({
+                message: 'Proxy Confirmed! Request sent to admin for approval.',
+                aap
+            });
+        }
+
         if (aap.status !== 'awaiting_retailer_confirm') {
             return res.status(400).json({ message: 'This purchase is not awaiting confirmation' });
         }
@@ -492,6 +537,17 @@ const proxyDeliverAAP = async (req, res, next) => {
 
         if (aap.agent.toString() !== req.user._id.toString()) {
             return res.status(403).json({ message: 'Only the creating agent can perform proxy delivery' });
+        }
+
+        // Idempotency: if already received, return success
+        if (aap.status === 'received' || aap.status === 'completed') {
+            await aap.populate('retailer', 'name phone email');
+            await aap.populate('agent', 'name phone email');
+            return res.json({
+                message: 'Proxy Receipt Confirmed! Credit has been locked.',
+                dueDate: aap.dueDate,
+                aap
+            });
         }
 
         if (aap.status !== 'delivered' && aap.status !== 'fund_disbursed') {

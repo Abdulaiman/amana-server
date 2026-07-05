@@ -251,6 +251,16 @@ const toggleAgentStatus = async (req, res) => {
     if (user && user.role === 'retailer') {
         user.isAgent = !user.isAgent;
         const updated = await user.save();
+        
+        await AuditLog.create({
+            admin: req.user._id,
+            action: 'TOGGLE_AGENT_STATUS',
+            targetId: user._id,
+            targetType: 'User',
+            details: { isAgent: user.isAgent },
+            note: `Admin toggled agent status to ${user.isAgent} for ${user.name}`
+        });
+
         res.json({ message: `Agent status updated for ${user.name}`, isAgent: updated.isAgent });
     } else {
         res.status(404);
@@ -823,6 +833,75 @@ const confirmManualPayment = async (req, res) => {
     }
 };
 
+// @desc    Update Retailer Score (Override/Exceptions)
+// @route   PUT /api/admin/retailer/:id/score
+// @access  Private (Admin Only)
+const updateRetailerScore = async (req, res) => {
+    try {
+        const { score, reason } = req.body;
+
+        if (score === undefined || score === null) {
+            return res.status(400).json({ message: 'Score is required' });
+        }
+
+        const newScore = Number(score);
+        if (isNaN(newScore) || newScore < 0 || newScore > 300) {
+            return res.status(400).json({ message: 'Score must be a number between 0 and 300' });
+        }
+
+        const user = await User.findById(req.params.id);
+        if (!user || user.role !== 'retailer') {
+            return res.status(404).json({ message: 'Retailer not found' });
+        }
+
+        const previousScore = user.amanaScore;
+        const previousLimit = user.creditLimit;
+        const previousTier = user.tier;
+
+        const newLimit = determineCreditLimit(newScore);
+        const newTier = determineTier(newScore);
+
+        user.amanaScore = newScore;
+        user.creditLimit = newLimit;
+        user.tier = newTier;
+
+        await user.save();
+
+        // Audit Log
+        await AuditLog.create({
+            admin: req.user._id,
+            action: 'OVERRIDE_RETAILER_SCORE',
+            targetId: user._id,
+            targetType: 'User',
+            details: { 
+                previousScore, 
+                newScore, 
+                previousLimit, 
+                newLimit, 
+                previousTier, 
+                newTier, 
+                reason 
+            },
+            note: reason || `Admin manually updated score for ${user.name} to ${newScore}`
+        });
+
+        res.json({
+            success: true,
+            message: `Retailer score updated to ${newScore}`,
+            user: {
+                _id: user._id,
+                name: user.name,
+                amanaScore: user.amanaScore,
+                creditLimit: user.creditLimit,
+                tier: user.tier
+            }
+        });
+    } catch (error) {
+        console.error('Update Retailer Score Error:', error);
+        res.status(500).json({ message: error.message || 'Failed to update score' });
+    }
+};
+
 module.exports = { 
     getWithdrawalRequests, 
     confirmPayout, 
@@ -847,5 +926,6 @@ module.exports = {
     getAuditLogs,
     getDebtors,
     sendBroadcast,
-    confirmManualPayment
+    confirmManualPayment,
+    updateRetailerScore
 };

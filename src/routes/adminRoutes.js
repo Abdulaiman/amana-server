@@ -25,7 +25,8 @@ const {
     getAuditLogs,
     getDebtors,
     sendBroadcast,
-    confirmManualPayment
+    confirmManualPayment,
+    updateRetailerScore
 } = require('../controllers/adminController');
 
 // Withdrawals / Payouts
@@ -45,6 +46,7 @@ router.get('/retailer/:id', protect, admin, getRetailerDetails);
 router.put('/retailer/:id/verify', protect, admin, verifyRetailer);
 router.put('/retailer/:id/reject', protect, admin, rejectRetailer);
 router.put('/retailer/:id/agent', protect, admin, toggleAgentStatus);
+router.put('/retailer/:id/score', protect, admin, updateRetailerScore);
 
 // Agent Management
 router.get('/agents', protect, admin, getAllAgents);
