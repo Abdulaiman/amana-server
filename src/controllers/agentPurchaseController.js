@@ -17,14 +17,14 @@ const createAAP = async (req, res, next) => {
         const { 
             productName, 
             productDescription, 
-            quantity, 
             productPhotos, 
             sellerName, 
             sellerPhone, 
             sellerLocation,
             purchasePrice,
-            repaymentTerm = 14,
-            retailerId
+            repaymentTerm,
+            retailerId,
+            requestedDuration
         } = req.body;
 
         if (!productName || !purchasePrice) {
@@ -39,13 +39,13 @@ const createAAP = async (req, res, next) => {
             agent: agent._id,
             productName,
             productDescription,
-            quantity: quantity || 1,
             productPhotos,
             sellerName,
             sellerPhone,
             sellerLocation,
             purchasePrice,
             repaymentTerm,
+            requestedDuration: requestedDuration && [1, 2, 4, 8, 12, 24, 48, 72].includes(Number(requestedDuration)) ? Number(requestedDuration) : undefined,
             status: 'draft'
         };
 
@@ -83,23 +83,52 @@ const createAAP = async (req, res, next) => {
             aapData.status = 'awaiting_retailer_confirm';
         }
 
-        // Prevent duplicate submissions within a short window (e.g. 15 seconds)
-        const recentAAP = await AgentPurchase.findOne({
-            agent: agent._id,
-            retailer: retailerId || null,
-            productName,
-            purchasePrice,
-            createdAt: { $gte: new Date(Date.now() - 15000) }
-        });
+        // Atomic dedup: use findOneAndUpdate with upsert to prevent race conditions
+        // Keep $set and $setOnInsert fields disjoint to avoid MongoDB "conflict" error
+        let setOnInsert = { ...aapData };
 
-        if (recentAAP) {
-            await recentAAP.populate('retailer', 'name phone email businessInfo amanaScore creditLimit usedCredit');
-            return res.status(201).json(recentAAP);
+        if (retailerId) {
+            delete setOnInsert.retailer;
+            delete setOnInsert.markupPercentage;
+            delete setOnInsert.markupAmount;
+            delete setOnInsert.totalRetailerCost;
+            delete setOnInsert.status;
+
+            update = {
+                $setOnInsert: setOnInsert,
+                $set: {
+                    retailer: aapData.retailer,
+                    markupPercentage: aapData.markupPercentage,
+                    markupAmount: aapData.markupAmount,
+                    totalRetailerCost: aapData.totalRetailerCost,
+                    status: 'awaiting_retailer_confirm'
+                }
+            };
+        } else {
+            update = { $setOnInsert: setOnInsert };
         }
 
-        const aap = new AgentPurchase(aapData);
-        const created = await aap.save();
-        res.status(201).json(created);
+        const aap = await AgentPurchase.findOneAndUpdate(
+            {
+                agent: agent._id,
+                productName,
+                purchasePrice,
+                status: { $in: ['draft', 'awaiting_retailer_confirm'] },
+                createdAt: { $gte: new Date(Date.now() - 30000) }
+            },
+            update,
+            {
+                upsert: true,
+                new: true,
+                setDefaultsOnInsert: true
+            }
+        );
+
+        if (aap.retailer) {
+            await aap.populate('retailer', 'name phone email businessInfo amanaScore creditLimit usedCredit');
+        }
+
+        res.status(201).json(aap);
     } catch (error) {
         next(error);
     }
@@ -110,7 +139,7 @@ const createAAP = async (req, res, next) => {
 // @access  Private (Agent)
 const linkRetailer = async (req, res, next) => {
     try {
-        const { retailerId, repaymentTerm } = req.body;
+        const { retailerId, repaymentTerm, requestedDuration } = req.body;
 
         if (!retailerId) {
             return res.status(400).json({ message: 'Retailer ID is required' });
@@ -144,8 +173,10 @@ const linkRetailer = async (req, res, next) => {
             return res.status(400).json({ message: 'Selected user is not a retailer' });
         }
 
-        // Update repayment term if provided
-        const term = repaymentTerm || aap.repaymentTerm || 14;
+        if (!repaymentTerm || ![3, 7, 14].includes(repaymentTerm)) {
+            return res.status(400).json({ message: 'Please select a repayment term (3, 7, or 14 days)' });
+        }
+        const term = repaymentTerm;
         
         // Calculate markup using Amana Engine
         const markupPercentage = determineMarkup(retailer.amanaScore, term);
@@ -170,6 +201,9 @@ const linkRetailer = async (req, res, next) => {
         aap.markupAmount = markupAmount;
         aap.totalRetailerCost = totalRetailerCost;
         aap.status = 'awaiting_retailer_confirm';
+        if (requestedDuration && [1, 2, 4, 8, 12, 24, 48, 72].includes(Number(requestedDuration))) {
+            aap.requestedDuration = Number(requestedDuration);
+        }
 
         const updated = await aap.save();
         
@@ -205,7 +239,7 @@ const retailerConfirm = async (req, res, next) => {
             await aap.populate('retailer', 'name phone email businessInfo');
             await aap.populate('agent', 'name phone email');
             return res.json({
-                message: 'Confirmed! Request sent to admin for approval.',
+                message: 'Interest recorded! Amana will review your request. You will receive the final Murabaha sale terms after we acquire the goods.',
                 aap
             });
         }
@@ -223,7 +257,7 @@ const retailerConfirm = async (req, res, next) => {
         await updated.populate('agent', 'name phone email');
 
         res.json({
-            message: 'Confirmed! Request sent to admin for approval.',
+            message: 'Interest recorded! By confirming, you have expressed your intent to purchase this product through Amana Murabaha. Once we acquire the goods, you will be presented with the final sale terms for your acceptance. Amana will review your request shortly.',
             aap: updated
         });
     } catch (error) {
@@ -250,7 +284,7 @@ const declineAAP = async (req, res, next) => {
             return res.status(403).json({ message: 'Not authorized' });
         }
 
-        if (['received', 'completed', 'declined'].includes(aap.status)) {
+        if (['received', 'completed', 'declined', 'expired'].includes(aap.status)) {
             return res.status(400).json({ message: 'Cannot decline at this stage' });
         }
 
@@ -269,7 +303,7 @@ const declineAAP = async (req, res, next) => {
 // @access  Private (Admin)
 const adminApprove = async (req, res, next) => {
     try {
-        const { disbursementMethod, disbursementReference } = req.body;
+        const { disbursementMethod, disbursementReference, duration } = req.body;
 
         if (!disbursementMethod) {
             return res.status(400).json({ message: 'Disbursement method is required' });
@@ -301,14 +335,19 @@ const adminApprove = async (req, res, next) => {
             });
         }
 
-        // Set 1-hour expiry timer
+        // Use admin-provided duration, fallback to agent requested, default 1 hour
+        const effectiveHours = duration && [1, 2, 4, 8, 12, 24, 48, 72].includes(Number(duration))
+            ? Number(duration)
+            : (aap.requestedDuration || 1);
+        
         const now = new Date();
-        const expiresAt = new Date(now.getTime() + 60 * 60 * 1000); // +1 hour
+        const expiresAt = new Date(now.getTime() + effectiveHours * 60 * 60 * 1000);
 
         aap.approvedBy = req.user._id;
         aap.disbursedAmount = aap.purchasePrice;
         aap.disbursementMethod = disbursementMethod;
         aap.disbursementReference = disbursementReference || `AAP-${aap._id.toString().slice(-6).toUpperCase()}`;
+        aap.adminAdjustedDuration = effectiveHours;
         aap.status = 'fund_disbursed';
         aap.adminApprovedAt = now;
         aap.fundDisbursedAt = now;
@@ -332,8 +371,169 @@ const adminApprove = async (req, res, next) => {
         await updated.populate('approvedBy', 'name');
 
         res.json({
-            message: 'Approved! Agent has 1 hour to complete purchase.',
+            message: `Approved! ₦${aap.purchasePrice.toLocaleString()} disbursed to ${aap.agent?.name || 'agent'}. Duration: ${effectiveHours} hour${effectiveHours > 1 ? 's' : ''}.`,
             expiresAt,
+            duration: effectiveHours,
+            aap: updated
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Agent sends Murabaha sale offer to retailer
+// @route   PUT /api/aap/:id/send-murabaha-offer
+// @access  Private (Agent)
+const sendMurabahaOffer = async (req, res, next) => {
+    try {
+        const { photoProof } = req.body || {};
+
+        const aap = await AgentPurchase.findById(req.params.id);
+        
+        if (!aap) {
+            return res.status(404).json({ message: 'Agent purchase not found' });
+        }
+
+        if (aap.agent.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Not authorized' });
+        }
+
+        if (aap.status !== 'fund_disbursed') {
+            return res.status(400).json({ message: 'Funds must be disbursed before sending Murabaha offer' });
+        }
+
+        // Check if expired
+        if (aap.expiresAt && new Date() > aap.expiresAt) {
+            aap.status = 'expired';
+            await aap.save();
+            return res.status(400).json({ message: 'This purchase has expired (duration exceeded). Contact admin.' });
+        }
+
+        aap.status = 'pending_murabaha_acceptance';
+        aap.murabahaOfferSentAt = new Date();
+        if (photoProof) {
+            aap.proxyProofUrl = photoProof;
+        }
+
+        const updated = await aap.save();
+
+        await updated.populate('retailer', 'name phone email');
+        await updated.populate('agent', 'name phone email');
+
+        res.json({
+            message: `Murabaha offer sent to ${aap.retailer?.name || 'retailer'}. Awaiting their acceptance.`,
+            offer: {
+                purchasePrice: aap.purchasePrice,
+                markupPercentage: aap.markupPercentage,
+                markupAmount: aap.markupAmount,
+                totalRetailerCost: aap.totalRetailerCost,
+                repaymentTerm: aap.repaymentTerm
+            },
+            aap: updated
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Retailer accepts the Murabaha sale offer
+// @route   PUT /api/aap/:id/accept-murabaha
+// @access  Private (Retailer)
+const acceptMurabaha = async (req, res, next) => {
+    try {
+        const aap = await AgentPurchase.findById(req.params.id);
+        
+        if (!aap) {
+            return res.status(404).json({ message: 'Agent purchase not found' });
+        }
+
+        if (aap.retailer.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Not authorized' });
+        }
+
+        if (aap.status !== 'pending_murabaha_acceptance') {
+            return res.status(400).json({ message: 'No pending Murabaha offer to accept' });
+        }
+
+        // Final credit check
+        const retailer = await User.findById(aap.retailer);
+        const availableCredit = retailer.creditLimit - retailer.usedCredit;
+        if (aap.totalRetailerCost > availableCredit) {
+            return res.status(400).json({
+                message: `Insufficient credit to complete this purchase. You need ₦${aap.totalRetailerCost.toLocaleString()} but only ₦${availableCredit.toLocaleString()} available.`,
+                creditRequired: aap.totalRetailerCost,
+                creditAvailable: availableCredit
+            });
+        }
+
+        aap.status = 'murabaha_accepted';
+        aap.murabahaAcceptedAt = new Date();
+
+        const updated = await aap.save();
+
+        await updated.populate('retailer', 'name phone email');
+        await updated.populate('agent', 'name phone email');
+
+        res.json({
+            message: `You have accepted the Murabaha sale. Amana purchased ${aap.productName} at ₦${aap.purchasePrice.toLocaleString()} and sells it to you at ₦${aap.totalRetailerCost.toLocaleString()} (${aap.markupPercentage}% markup). Due in ${aap.repaymentTerm} days after delivery. Awaiting delivery.`,
+            aap: updated
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Agent confirms Murabaha acceptance on retailer's behalf (proxy)
+// @route   PUT /api/aap/:id/proxy-accept-murabaha
+// @access  Private (Agent)
+const proxyAcceptMurabaha = async (req, res, next) => {
+    try {
+        const { photoProof } = req.body;
+
+        if (!photoProof) {
+            return res.status(400).json({ message: 'Photo proof is required for proxy Murabaha acceptance' });
+        }
+
+        const aap = await AgentPurchase.findById(req.params.id);
+        
+        if (!aap) {
+            return res.status(404).json({ message: 'Agent purchase not found' });
+        }
+
+        if (aap.agent.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Only the creating agent can perform proxy Murabaha acceptance' });
+        }
+
+        if (aap.status !== 'fund_disbursed' && aap.status !== 'pending_murabaha_acceptance') {
+            return res.status(400).json({ message: 'Cannot accept Murabaha at this stage. Funds must be disbursed first.' });
+        }
+
+        // Final credit check
+        const retailer = await User.findById(aap.retailer);
+        const availableCredit = retailer.creditLimit - retailer.usedCredit;
+        if (aap.totalRetailerCost > availableCredit) {
+            return res.status(400).json({
+                message: `Retailer has insufficient credit. Needs ₦${aap.totalRetailerCost.toLocaleString()} but only ₦${availableCredit.toLocaleString()} available.`,
+                creditRequired: aap.totalRetailerCost,
+                creditAvailable: availableCredit
+            });
+        }
+
+        if (aap.status === 'fund_disbursed') {
+            aap.murabahaOfferSentAt = new Date();
+        }
+        aap.status = 'murabaha_accepted';
+        aap.murabahaAcceptedAt = new Date();
+        aap.proxyMurabahaAcceptance = true;
+        aap.proxyProofUrl = photoProof;
+
+        const updated = await aap.save();
+
+        await updated.populate('retailer', 'name phone email');
+        await updated.populate('agent', 'name phone email');
+
+        res.json({
+            message: `Proxy Murabaha acceptance complete. Amana purchased ${aap.productName} at ₦${aap.purchasePrice.toLocaleString()} and sells to ${aap.retailer?.name || 'retailer'} at ₦${aap.totalRetailerCost.toLocaleString()} (${aap.markupPercentage}% markup).`,
             aap: updated
         });
     } catch (error) {
@@ -356,15 +556,15 @@ const markDelivered = async (req, res, next) => {
             return res.status(403).json({ message: 'Not authorized' });
         }
 
-        if (aap.status !== 'fund_disbursed') {
-            return res.status(400).json({ message: 'Cannot mark as delivered at this stage' });
+        if (aap.status !== 'murabaha_accepted') {
+            return res.status(400).json({ message: 'Murabaha terms must be accepted before delivery' });
         }
 
         // Check if expired
-        if (new Date() > aap.expiresAt) {
+        if (aap.expiresAt && new Date() > aap.expiresAt) {
             aap.status = 'expired';
             await aap.save();
-            return res.status(400).json({ message: 'This purchase has expired (1hr limit exceeded)' });
+            return res.status(400).json({ message: 'This purchase has expired (duration exceeded). Contact admin.' });
         }
 
         // Generate OTP
@@ -411,7 +611,7 @@ const confirmReceipt = async (req, res, next) => {
             await aap.populate('retailer', 'name phone email');
             await aap.populate('agent', 'name phone email');
             return res.json({
-                message: 'Receipt confirmed! Credit has been locked.',
+                message: `Goods received! ₦${aap.totalRetailerCost?.toLocaleString()} added to your repayment balance. Due by ${new Date(aap.dueDate).toLocaleDateString()}.`,
                 dueDate: aap.dueDate,
                 aap
             });
@@ -427,11 +627,17 @@ const confirmReceipt = async (req, res, next) => {
 
         // Lock retailer's credit
         const retailer = await User.findById(aap.retailer);
-        retailer.usedCredit += aap.totalRetailerCost;
+        const newUsedCredit = retailer.usedCredit + aap.totalRetailerCost;
+        if (newUsedCredit > retailer.creditLimit) {
+            return res.status(400).json({
+                message: `Cannot confirm receipt — retailer would exceed credit limit. Needs ₦${aap.totalRetailerCost.toLocaleString()} but only ₦${(retailer.creditLimit - retailer.usedCredit).toLocaleString()} available.`
+            });
+        }
+        retailer.usedCredit = newUsedCredit;
         await retailer.save();
 
         // Set due date
-        const termDays = aap.repaymentTerm || 14;
+        const termDays = Number.isFinite(aap.repaymentTerm) ? aap.repaymentTerm : 14;
         const dueDate = new Date(Date.now() + termDays * 24 * 60 * 60 * 1000);
 
         aap.status = 'received';
@@ -445,7 +651,7 @@ const confirmReceipt = async (req, res, next) => {
             user: retailer._id,
             type: 'loan_disbursement',
             amount: aap.totalRetailerCost,
-            description: `AAP Credit Lock - ${aap.productName} (${aap.repaymentTerm} days)`,
+            description: `AAP Credit Lock - ${aap.productName} (${termDays} days)`,
             status: 'success',
             agentPurchaseId: aap._id
         });
@@ -454,7 +660,7 @@ const confirmReceipt = async (req, res, next) => {
         await updated.populate('agent', 'name phone email');
 
         res.json({
-            message: 'Receipt confirmed! Credit has been locked.',
+            message: `Goods received! ₦${aap.totalRetailerCost.toLocaleString()} added to your repayment balance. Due by ${dueDate.toLocaleDateString()}. Thank you for choosing Amana Murabaha.`,
             dueDate,
             aap: updated
         });
@@ -489,7 +695,7 @@ const proxyConfirmAAP = async (req, res, next) => {
             await aap.populate('retailer', 'name phone email businessInfo');
             await aap.populate('agent', 'name phone email');
             return res.json({
-                message: 'Proxy Confirmed! Request sent to admin for approval.',
+                message: 'Interest recorded via agent. Amana will review your request.',
                 aap
             });
         }
@@ -510,7 +716,7 @@ const proxyConfirmAAP = async (req, res, next) => {
         await updated.populate('agent', 'name phone email');
 
         res.json({
-            message: 'Proxy Confirmed! Request sent to admin for approval.',
+            message: 'Interest recorded via agent. The retailer has expressed intent to purchase through Amana Murabaha. Amana will review the request.',
             aap: updated
         });
     } catch (error) {
@@ -550,21 +756,27 @@ const proxyDeliverAAP = async (req, res, next) => {
             });
         }
 
-        if (aap.status !== 'delivered' && aap.status !== 'fund_disbursed') {
-            return res.status(400).json({ message: 'Goods must be funded or delivered first' });
+        if (aap.status !== 'delivered' && aap.status !== 'murabaha_accepted') {
+            return res.status(400).json({ message: 'Murabaha terms must be accepted before delivery' });
         }
 
         // Lock retailer's credit
         const retailer = await User.findById(aap.retailer);
-        retailer.usedCredit += aap.totalRetailerCost;
+        const newUsedCredit = retailer.usedCredit + aap.totalRetailerCost;
+        if (newUsedCredit > retailer.creditLimit) {
+            return res.status(400).json({
+                message: `Cannot confirm proxy delivery — retailer would exceed credit limit. Needs ₦${aap.totalRetailerCost.toLocaleString()} but only ₦${(retailer.creditLimit - retailer.usedCredit).toLocaleString()} available.`
+            });
+        }
+        retailer.usedCredit = newUsedCredit;
         await retailer.save();
 
         // Set due date
-        const termDays = aap.repaymentTerm || 14;
+        const termDays = Number.isFinite(aap.repaymentTerm) ? aap.repaymentTerm : 14;
         const dueDate = new Date(Date.now() + termDays * 24 * 60 * 60 * 1000);
 
         // If skipping 'delivered' state, set timestamp
-        if (aap.status === 'fund_disbursed') {
+        if (aap.status === 'murabaha_accepted') {
             aap.deliveredAt = new Date();
         }
 
@@ -572,7 +784,7 @@ const proxyDeliverAAP = async (req, res, next) => {
         aap.receivedAt = new Date();
         aap.dueDate = dueDate;
         aap.proxyReceipt = true;
-        aap.proxyProofUrl = photoProof; // Overwrite initial proof if any, or maybe append? Single field sufficient for now.
+        aap.proxyProofUrl = photoProof;
 
         const updated = await aap.save();
 
@@ -581,7 +793,7 @@ const proxyDeliverAAP = async (req, res, next) => {
             user: retailer._id,
             type: 'loan_disbursement',
             amount: aap.totalRetailerCost,
-            description: `AAP Credit Lock (Proxy) - ${aap.productName} (${aap.repaymentTerm} days)`,
+            description: `AAP Credit Lock (Proxy) - ${aap.productName} (${termDays} days)`,
             status: 'success',
             agentPurchaseId: aap._id
         });
@@ -687,7 +899,9 @@ const getAdminDashboard = async (req, res, next) => {
         // Summary stats
         const stats = {
             pending: await AgentPurchase.countDocuments({ status: 'pending_admin_approval' }),
-            active: await AgentPurchase.countDocuments({ status: 'fund_disbursed' }),
+            active: await AgentPurchase.countDocuments({ status: { $in: ['fund_disbursed', 'pending_murabaha_acceptance'] } }),
+            murabahaPending: await AgentPurchase.countDocuments({ status: 'pending_murabaha_acceptance' }),
+            murabahaAccepted: await AgentPurchase.countDocuments({ status: 'murabaha_accepted' }),
             delivered: await AgentPurchase.countDocuments({ status: 'delivered' }),
             expired: await AgentPurchase.countDocuments({ status: 'expired' }),
             completed: await AgentPurchase.countDocuments({ status: { $in: ['received', 'completed'] } })
@@ -782,12 +996,196 @@ const findRetailerByPhone = async (req, res, next) => {
     }
 };
 
+// @desc    Agent cancels AAP before payment
+// @route   PUT /api/aap/:id/cancel
+// @access  Private (Agent who created)
+const cancelAAP = async (req, res, next) => {
+    try {
+        const aap = await AgentPurchase.findById(req.params.id);
+
+        if (!aap) {
+            return res.status(404).json({ message: 'Agent purchase not found' });
+        }
+
+        if (aap.agent.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Only the creating agent can cancel this purchase' });
+        }
+
+        if (!['draft', 'awaiting_retailer_confirm', 'pending_admin_approval'].includes(aap.status)) {
+            return res.status(400).json({ message: 'Cannot cancel at this stage. This purchase has already been processed.' });
+        }
+
+        aap.status = 'cancelled';
+        aap.cancelledBy = req.user._id;
+        aap.cancelledAt = new Date();
+        aap.cancelReason = req.body.reason || 'Cancelled by agent';
+
+        const updated = await aap.save();
+
+        await Transaction.create({
+            user: req.user._id,
+            type: 'refund',
+            amount: 0,
+            description: `AAP cancelled before payment - ${aap.productName} (${aap.cancelReason})`,
+            status: 'success',
+            agentPurchaseId: aap._id
+        });
+
+        await updated.populate('retailer', 'name phone email');
+        await updated.populate('agent', 'name phone email');
+
+        res.json({ message: 'Purchase cancelled successfully', aap: updated });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Agent requests cancellation after payment
+// @route   PUT /api/aap/:id/request-cancellation
+// @access  Private (Agent who created)
+const requestCancellation = async (req, res, next) => {
+    try {
+        const aap = await AgentPurchase.findById(req.params.id);
+
+        if (!aap) {
+            return res.status(404).json({ message: 'Agent purchase not found' });
+        }
+
+        if (aap.agent.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Only the creating agent can request cancellation' });
+        }
+
+        if (!['fund_disbursed', 'pending_murabaha_acceptance', 'murabaha_accepted', 'delivered'].includes(aap.status)) {
+            return res.status(400).json({ message: 'Cannot request cancellation at this stage.' });
+        }
+
+        if (!req.body.reason || req.body.reason.trim().length < 5) {
+            return res.status(400).json({ message: 'Please provide a reason (at least 5 characters)' });
+        }
+
+        if (!req.body.refundProofUrl) {
+            return res.status(400).json({ message: 'Please upload a receipt/proof of the refund payment' });
+        }
+
+        aap.status = 'cancellation_requested';
+        aap.cancelledBy = req.user._id;
+        aap.cancelledAt = new Date();
+        aap.cancelReason = req.body.reason;
+        aap.refundProofUrl = req.body.refundProofUrl;
+
+        const updated = await aap.save();
+
+        await Transaction.create({
+            user: req.user._id,
+            type: 'refund',
+            amount: aap.disbursedAmount || aap.purchasePrice,
+            description: `Cancellation requested for AAP - ${aap.productName}. Reason: ${aap.cancelReason}. Proof uploaded. Awaiting admin confirmation.`,
+            status: 'pending',
+            agentPurchaseId: aap._id
+        });
+
+        await updated.populate('retailer', 'name phone email');
+        await updated.populate('agent', 'name phone email');
+
+        res.json({
+            message: 'Cancellation request submitted. Return the funds to the admin account below and await confirmation.',
+            adminAccount: {
+                bank: 'Moniepoint',
+                accountName: 'Amana Murabaha Global Enterprise',
+                accountNumber: '6042197639'
+            },
+            aap: updated
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Admin confirms cash returned and approves cancellation
+// @route   PUT /api/aap/:id/approve-cancellation
+// @access  Private (Admin)
+const approveCancellation = async (req, res, next) => {
+    try {
+        const aap = await AgentPurchase.findById(req.params.id);
+
+        if (!aap) {
+            return res.status(404).json({ message: 'Agent purchase not found' });
+        }
+
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Admin access required' });
+        }
+
+        if (aap.status !== 'cancellation_requested') {
+            return res.status(400).json({ message: 'This purchase has not requested cancellation' });
+        }
+
+        aap.status = 'cancelled';
+        aap.cashReturnConfirmedBy = req.user._id;
+        aap.cashReturnConfirmedAt = new Date();
+
+        const updated = await aap.save();
+
+        // Update the pending transaction to success
+        await Transaction.updateMany(
+            { agentPurchaseId: aap._id, type: 'refund', status: 'pending' },
+            { status: 'success', description: `Cancellation approved by admin. Cash return confirmed for AAP - ${aap.productName}.` }
+        );
+
+        // Log admin action
+        await Transaction.create({
+            user: req.user._id,
+            type: 'refund',
+            amount: aap.disbursedAmount || aap.purchasePrice,
+            description: `Admin approved cancellation and confirmed cash return for AAP - ${aap.productName}`,
+            status: 'success',
+            agentPurchaseId: aap._id
+        });
+
+        await updated.populate('retailer', 'name phone email');
+        await updated.populate('agent', 'name phone email');
+        await updated.populate('cashReturnConfirmedBy', 'name');
+
+        res.json({ message: 'Cancellation approved. Cash return confirmed.', aap: updated });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Admin views all pending cancellation requests
+// @route   GET /api/aap/admin/cancellation-requests
+// @access  Private (Admin)
+const getCancellationRequests = async (req, res, next) => {
+    try {
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Admin access required' });
+        }
+
+        const requests = await AgentPurchase.find({ status: 'cancellation_requested' })
+            .populate('agent', 'name phone email')
+            .populate('retailer', 'name phone email')
+            .populate('cancelledBy', 'name')
+            .sort({ cancelledAt: -1 });
+
+        const stats = {
+            total: await AgentPurchase.countDocuments({ status: 'cancellation_requested' })
+        };
+
+        res.json({ requests, stats });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     createAAP,
     linkRetailer,
     retailerConfirm,
     declineAAP,
     adminApprove,
+    sendMurabahaOffer,
+    acceptMurabaha,
+    proxyAcceptMurabaha,
     markDelivered,
     confirmReceipt,
     getAAPById,
@@ -798,5 +1196,9 @@ module.exports = {
     searchRetailers,
     findRetailerByPhone,
     proxyConfirmAAP,
-    proxyDeliverAAP
+    proxyDeliverAAP,
+    cancelAAP,
+    requestCancellation,
+    approveCancellation,
+    getCancellationRequests
 };

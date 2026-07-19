@@ -7,6 +7,9 @@ const {
     retailerConfirm,
     declineAAP,
     adminApprove,
+    sendMurabahaOffer,
+    acceptMurabaha,
+    proxyAcceptMurabaha,
     markDelivered,
     confirmReceipt,
     getAAPById,
@@ -17,24 +20,33 @@ const {
     searchRetailers,
     findRetailerByPhone,
     proxyConfirmAAP,
-    proxyDeliverAAP
+    proxyDeliverAAP,
+    cancelAAP,
+    requestCancellation,
+    approveCancellation,
+    getCancellationRequests
 } = require('../controllers/agentPurchaseController');
 
 // Agent Routes
 router.post('/', protect, createAAP);
 router.put('/:id/link-retailer', protect, linkRetailer);
+router.put('/:id/cancel', protect, cancelAAP);
+router.put('/:id/request-cancellation', protect, requestCancellation);
 router.get('/agent/queue', protect, getAgentQueue);
 router.put('/:id/deliver', protect, markDelivered);
+router.put('/:id/send-murabaha-offer', protect, sendMurabahaOffer);
 router.get('/search-retailers', protect, searchRetailers);
 router.get('/search-retailers', protect, searchRetailers);
 router.get('/find-retailer', protect, findRetailerByPhone);
 
 // Proxy Routes
 router.put('/:id/proxy-confirm', protect, proxyConfirmAAP);
+router.put('/:id/proxy-accept-murabaha', protect, proxyAcceptMurabaha);
 router.put('/:id/proxy-deliver', protect, proxyDeliverAAP);
 
 // Retailer Routes
 router.put('/:id/confirm', protect, retailerConfirm);
+router.put('/:id/accept-murabaha', protect, acceptMurabaha);
 router.put('/:id/receive', protect, confirmReceipt);
 router.get('/retailer/mine', protect, getRetailerAAPs);
 
@@ -44,7 +56,9 @@ router.get('/:id', protect, getAAPById);
 
 // Admin Routes
 router.put('/:id/approve', protect, admin, adminApprove);
+router.put('/:id/approve-cancellation', protect, admin, approveCancellation);
 router.get('/admin/dashboard', protect, admin, getAdminDashboard);
+router.get('/admin/cancellation-requests', protect, admin, getCancellationRequests);
 router.get('/admin/expired', protect, admin, getExpiredAAPs);
 
 module.exports = router;

@@ -9,7 +9,6 @@ const agentPurchaseSchema = mongoose.Schema({
   // Product (captured once by agent, reused for receipt)
   productName: { type: String, required: true },
   productDescription: { type: String },
-  quantity: { type: Number, default: 1 },
   productPhotos: [{ type: String }], // 1-10 Cloudinary URLs
   
   // Seller Info
@@ -19,10 +18,14 @@ const agentPurchaseSchema = mongoose.Schema({
   
   // Financials
   purchasePrice: { type: Number, required: true },
-  repaymentTerm: { type: Number, enum: [3, 7, 14], default: 14 },
+  repaymentTerm: { type: Number, enum: [3, 7, 14] },
   markupPercentage: { type: Number },
   markupAmount: { type: Number },
   totalRetailerCost: { type: Number },
+  
+  // Duration (agent requested, admin can adjust)
+  requestedDuration: { type: Number },           // Hours requested by agent
+  adminAdjustedDuration: { type: Number },       // Hours set by admin (overrides requested)
   
   // Disbursement (set when admin approves)
   disbursedAmount: { type: Number },
@@ -34,19 +37,31 @@ const agentPurchaseSchema = mongoose.Schema({
     type: String, 
     enum: [
       'draft',                      // Agent created, not yet linked
-      'awaiting_retailer_confirm',  // Credit check passed, waiting for retailer
-      'pending_admin_approval',     // Retailer confirmed, waiting for admin
-      'fund_disbursed',             // Admin approved, agent has 1hr
+      'awaiting_retailer_confirm',  // Credit check passed, waiting for retailer to express interest
+      'pending_admin_approval',     // Retailer expressed interest, waiting for admin approval
+      'fund_disbursed',             // Admin approved, funds sent to agent
+      'pending_murabaha_acceptance',// Agent bought goods, sent Murabaha sale offer to retailer
+      'murabaha_accepted',          // Retailer accepted the Murabaha sale terms
       'delivered',                  // Agent delivered to retailer
       'received',                   // Retailer confirmed receipt
       'completed',                  // Repaid
-      'expired',                    // 1hr timeout
+      'expired',                    // Duration timeout
       'declined',                   // Admin or retailer declined
+      'cancelled',                  // Cancelled by agent (before payment) or admin (after refund)
+      'cancellation_requested',     // Agent requested cancellation after payment, awaiting admin
       'disputed'                    // Issue raised
     ],
     default: 'draft'
   },
   declineReason: { type: String },
+
+  // Cancellation / Refund
+  cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  cancelledAt: { type: Date },
+  cancelReason: { type: String },
+  refundProofUrl: { type: String },           // Receipt/evidence of agent returning cash
+  cashReturnConfirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  cashReturnConfirmedAt: { type: Date },
   
   // Security
   pickupCode: { type: String }, // 6-digit OTP for receipt confirmation
@@ -54,6 +69,7 @@ const agentPurchaseSchema = mongoose.Schema({
   // Proxy Actions (Agent-led overrides)
   proxyConfirmation: { type: Boolean, default: false }, // Agent confirmed for Retailer
   proxyReceipt: { type: Boolean, default: false }, // Agent confirmed delivery for Retailer
+  proxyMurabahaAcceptance: { type: Boolean, default: false }, // Agent accepted Murabaha on retailer's behalf
   proxyProofUrl: { type: String }, // Photo proof for proxy actions
 
   
@@ -64,6 +80,8 @@ const agentPurchaseSchema = mongoose.Schema({
   // Key Timestamps
   retailerConfirmedAt: { type: Date },
   adminApprovedAt: { type: Date },
+  murabahaOfferSentAt: { type: Date },
+  murabahaAcceptedAt: { type: Date },
   deliveredAt: { type: Date },
   receivedAt: { type: Date },
   dueDate: { type: Date },
@@ -73,6 +91,12 @@ const agentPurchaseSchema = mongoose.Schema({
   isPaid: { type: Boolean, default: false }
 
 }, { timestamps: true });
+
+// Compound index for atomic dedup of draft/awaiting AAPs
+agentPurchaseSchema.index(
+  { agent: 1, productName: 1, purchasePrice: 1, createdAt: -1 },
+  { partialFilterExpression: { status: { $in: ['draft', 'awaiting_retailer_confirm'] } } }
+);
 
 // Generate 6-digit OTP
 agentPurchaseSchema.methods.generatePickupCode = function() {

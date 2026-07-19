@@ -1,6 +1,6 @@
 /**
  * AAP Expiry Checker
- * Checks for agent purchases that have exceeded the 1-hour window
+ * Checks for agent purchases that have exceeded their duration window
  * and marks them as expired + notifies admin.
  * 
  * Run this as a cron job every 5 minutes:
@@ -15,9 +15,9 @@ const checkExpiredAAPs = async () => {
     try {
         const now = new Date();
 
-        // Find all AAPs where status is 'fund_disbursed' and expiresAt < now
+        // Find all AAPs where status requires action and expiresAt < now
         const expiredAAPs = await AgentPurchase.find({
-            status: 'fund_disbursed',
+            status: { $in: ['fund_disbursed', 'pending_murabaha_acceptance', 'murabaha_accepted'] },
             expiresAt: { $lt: now }
         }).populate('agent', 'name phone email')
           .populate('retailer', 'name phone');
@@ -34,7 +34,7 @@ const checkExpiredAAPs = async () => {
             aap.status = 'expired';
             await aap.save();
 
-            console.log(`[AAP Expiry Check] Marked AAP ${aap._id} as expired.`);
+            console.log(`[AAP Expiry Check] Marked AAP ${aap._id} (${aap.productName}) as expired. Previous status: ${aap.status}`);
         }
 
         // Notify admin(s) via email
@@ -44,11 +44,11 @@ const checkExpiredAAPs = async () => {
             const subject = `⚠️ Alert: ${expiredAAPs.length} Agent Purchase(s) Expired`;
             
             const expiredList = expiredAAPs.map(aap => 
-                `- ${aap.productName} (₦${aap.purchasePrice}) - Agent: ${aap.agent?.name || 'Unknown'}, Retailer: ${aap.retailer?.name || 'Unknown'}`
+                `- ${aap.productName} (₦${aap.purchasePrice}) - Status: ${aap.status} - Agent: ${aap.agent?.name || 'Unknown'}, Retailer: ${aap.retailer?.name || 'Unknown'}`
             ).join('\n');
 
             const message = `
-The following Agent-Assisted Purchases have exceeded the 1-hour window without completion:
+The following Agent-Assisted Purchases have exceeded their duration window without completion:
 
 ${expiredList}
 

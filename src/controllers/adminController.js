@@ -614,9 +614,9 @@ const getDebtors = async (req, res) => {
         };
     });
 
-    // 2. AAP Debtors
+    // 2. AAP Debtors (only 'received' — credit is locked and dueDate is set)
     const activeAAPs = await AgentPurchase.find({
-        status: { $in: ['received', 'delivered'] },
+        status: 'received',
         isPaid: false
     }).populate('retailer', 'name phone email creditLimit');
 
